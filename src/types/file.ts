@@ -7,6 +7,7 @@ export interface S3FileItem {
   category: FileCategory;
   url?: string;
   eTag?: string;
+  uploadedBy?: string;
 }
 
 export type FileCategory =
@@ -34,6 +35,27 @@ export interface StorageStats {
   bucketName: string;
   region: string;
   storageHealth: "connected" | "misconfigured" | "credentials_missing";
+}
+
+export interface CloudUser {
+  id?: string;
+  name: string;
+  email?: string;
+  objectCount: number;
+  totalSizeBytes: number;
+  totalSizeFormatted?: string;
+  firstUploadAt?: string;
+  lastActiveAt?: string;
+  createdAt: string;
+}
+
+export interface AdminDashboardData {
+  users: CloudUser[];
+  totalUsers: number;
+  totalObjects: number;
+  totalStorageBytes: number;
+  totalStorageFormatted: string;
+  databaseStatus: "connected" | "disconnected";
 }
 
 export interface ApiResponse<T = unknown> {

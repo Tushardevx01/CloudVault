@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import {
   LayoutDashboard,
   FolderOpen,
@@ -11,6 +12,7 @@ import {
   Server,
   X,
   ShieldCheck,
+  Shield,
 } from "lucide-react";
 import { StorageStats } from "@/types/file";
 import { ActiveTab, DEFAULT_BUCKET_NAME, DEFAULT_AWS_REGION } from "@/lib/constants";
@@ -153,6 +155,20 @@ export function Sidebar({
               </button>
             );
           })}
+          <div className="pt-2">
+            <Link
+              href="/admin"
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 transition-colors"
+            >
+              <div className="flex items-center gap-2.5">
+                <Shield className="w-4 h-4 text-sky-400" />
+                <span>Admin Portal</span>
+              </div>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300">
+                /admin
+              </span>
+            </Link>
+          </div>
         </nav>
 
         {/* Active AWS S3 Bucket Card */}

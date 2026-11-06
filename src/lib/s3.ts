@@ -263,10 +263,12 @@ export async function uploadToS3(params: {
   buffer: Buffer;
   originalFileName: string;
   contentType: string;
+  uploadedBy?: string;
 }): Promise<S3FileItem> {
   const bucket = getBucketName();
   const { key } = generateObjectKey(params.originalFileName);
   const category = getFileCategory(params.originalFileName, params.contentType);
+  const uploader = (params.uploadedBy || "Aditya").trim();
 
   await executeWithAutoRegion(async (client) => {
     const command = new PutObjectCommand({
@@ -277,6 +279,7 @@ export async function uploadToS3(params: {
       Metadata: {
         "original-name": encodeURIComponent(params.originalFileName),
         "category": category,
+        "uploaded-by": encodeURIComponent(uploader),
         "uploaded-at": new Date().toISOString(),
       },
     });
@@ -290,6 +293,7 @@ export async function uploadToS3(params: {
     lastModified: new Date().toISOString(),
     contentType: params.contentType,
     category,
+    uploadedBy: uploader,
   };
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   UploadCloud,
   X,
@@ -9,6 +9,7 @@ import {
   Loader2,
   Trash2,
   Cloud,
+  User,
 } from "lucide-react";
 import { formatBytes, getFileCategory } from "@/lib/utils";
 import { FileIcon } from "../files/FileIcon";
@@ -41,7 +42,17 @@ export function UploadModal({
   const [dragActive, setDragActive] = useState(false);
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploaderName, setUploaderName] = useState("Aditya");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("cloudvault_uploader_name");
+      if (saved && saved.trim()) {
+        setUploaderName(saved.trim());
+      }
+    }
+  }, []);
 
   if (!isOpen) return null;
 
@@ -114,6 +125,7 @@ export function UploadModal({
     setIsUploading(true);
 
     const formData = new FormData();
+    formData.append("userName", uploaderName.trim() || "Aditya");
     pendingFiles.forEach((item) => {
       formData.append("files", item.file);
     });
@@ -212,6 +224,32 @@ export function UploadModal({
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-4 flex-1">
+          {/* Uploader Name Field */}
+          <div className="p-3.5 rounded-xl bg-slate-800/50 border border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2">
+              <User className="w-4 h-4 text-sky-400" />
+              <label htmlFor="uploaderName" className="text-xs font-semibold text-slate-200">
+                Uploading As:
+              </label>
+            </div>
+            <div className="flex items-center gap-1.5 flex-1 max-w-xs">
+              <input
+                id="uploaderName"
+                type="text"
+                value={uploaderName}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setUploaderName(val);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("cloudvault_uploader_name", val);
+                  }
+                }}
+                placeholder="User / Contributor Name"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
+              />
+            </div>
+          </div>
+
           {/* Dropzone */}
           <div
             onDragEnter={handleDrag}

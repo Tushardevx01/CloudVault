@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listS3Files, deleteS3File, getS3ConfigStatus } from "@/lib/s3";
+import { removeFileRecord } from "@/lib/mongodb";
 import { FileCategory, S3FileItem } from "@/types/file";
 
 export async function GET(request: NextRequest) {
@@ -100,6 +101,12 @@ export async function DELETE(request: NextRequest) {
     }
 
     await deleteS3File(key);
+
+    try {
+      await removeFileRecord(key);
+    } catch (mongoErr) {
+      console.warn("MongoDB delete record warning:", mongoErr);
+    }
 
     return NextResponse.json({
       success: true,

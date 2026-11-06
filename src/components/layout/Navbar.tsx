@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import {
   Menu,
   RefreshCw,
@@ -8,6 +9,7 @@ import {
   Upload,
   CheckCircle2,
   AlertTriangle,
+  Shield,
 } from "lucide-react";
 import { ActiveTab, DEFAULT_AWS_REGION } from "@/lib/constants";
 
@@ -127,6 +129,16 @@ export function Navbar({
               className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-sky-400" : ""}`}
             />
           </button>
+
+          {/* Admin Link */}
+          <Link
+            href="/admin"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+            title="Open Admin Console"
+          >
+            <Shield className="w-3.5 h-3.5 text-sky-400" />
+            <span className="hidden md:inline">Admin</span>
+          </Link>
 
           {/* Upload Button */}
           <button
