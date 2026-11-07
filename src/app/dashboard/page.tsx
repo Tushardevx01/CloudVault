@@ -241,7 +241,10 @@ export default function UserDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
+    <div
+      className="min-h-screen bg-slate-50 text-slate-900 flex"
+      suppressHydrationWarning
+    >
       {/* Toast System */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 

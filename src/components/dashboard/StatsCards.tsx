@@ -37,7 +37,10 @@ export function StatsCards({
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+    <div
+      className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full"
+      suppressHydrationWarning
+    >
       {cards.map((card, idx) => {
         const Icon = card.icon;
         return (

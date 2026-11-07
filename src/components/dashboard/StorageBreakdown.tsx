@@ -78,7 +78,10 @@ export function StorageBreakdown({ stats, onFilterCategory }: StorageBreakdownPr
   const totalFiles = stats?.totalFiles ?? 0;
 
   return (
-    <div className="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 space-y-5 w-full shadow-xs">
+    <div
+      className="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 space-y-5 w-full shadow-xs"
+      suppressHydrationWarning
+    >
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-2.5">

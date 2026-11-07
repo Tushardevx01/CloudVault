@@ -347,7 +347,10 @@ export default function AdminPage() {
   // Unauthenticated Admin Login Card
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center justify-center p-4 sm:p-6">
+      <div
+        className="min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center justify-center p-4 sm:p-6"
+        suppressHydrationWarning
+      >
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
         <div className="w-full max-w-md space-y-6">
@@ -475,7 +478,10 @@ export default function AdminPage() {
 
   // Authenticated: Render Admin Dashboard
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
+    <div
+      className="min-h-screen bg-slate-50 text-slate-900 flex flex-col"
+      suppressHydrationWarning
+    >
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* Admin Top Navigation */}

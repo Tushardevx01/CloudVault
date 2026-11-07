@@ -47,7 +47,10 @@ export function Navbar({
   };
 
   return (
-    <header className="sticky top-0 z-30 w-full bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-3.5 shrink-0">
+    <header
+      suppressHydrationWarning
+      className="sticky top-0 z-30 w-full bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-3.5 shrink-0"
+    >
       <div className="flex items-center justify-between gap-4">
         {/* Left: Mobile Toggle & Page Context */}
         <div className="flex items-center gap-3 min-w-0">
