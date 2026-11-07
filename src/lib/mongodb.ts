@@ -12,7 +12,6 @@ const DEFAULT_ADMIN_USERNAME = "admin";
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "Adamas@2023";
 
 declare global {
-  // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 
@@ -258,7 +257,7 @@ export async function getAllUsersWithStats(): Promise<CloudUser[]> {
       .toArray();
 
     const existingUsers = await usersCollection.find({}).toArray();
-    const userMap = new Map<string, any>();
+    const userMap = new Map<string, (typeof existingUsers)[0]>();
 
     existingUsers.forEach((u) => {
       userMap.set(u.name, u);
@@ -424,6 +423,33 @@ export async function syncS3FilesWithMongo(s3Files: S3FileItem[]): Promise<void>
     }
   } catch (error) {
     console.warn("Could not sync S3 files with MongoDB:", error);
+  }
+}
+
+/**
+ * Fetches map of S3 key -> { uploadedBy, uploadedAt } from MongoDB.
+ */
+export async function getFileMetadataMap(): Promise<Map<string, { uploadedBy?: string; uploadedAt?: Date }>> {
+  try {
+    const db = await getDb();
+    const filesCollection = db.collection("files");
+    const docs = await filesCollection
+      .find({}, { projection: { key: 1, uploadedBy: 1, uploadedAt: 1 } })
+      .toArray();
+
+    const map = new Map<string, { uploadedBy?: string; uploadedAt?: Date }>();
+    for (const doc of docs) {
+      if (doc.key) {
+        map.set(doc.key, {
+          uploadedBy: doc.uploadedBy,
+          uploadedAt: doc.uploadedAt,
+        });
+      }
+    }
+    return map;
+  } catch (error) {
+    console.warn("Could not fetch file metadata map from MongoDB:", error);
+    return new Map();
   }
 }
 

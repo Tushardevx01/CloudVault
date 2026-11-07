@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listS3Files, deleteS3File, getS3ConfigStatus } from "@/lib/s3";
-import { removeFileRecord } from "@/lib/mongodb";
+import {
+  removeFileRecord,
+  getFileMetadataMap,
+  syncS3FilesWithMongo,
+  getDb,
+} from "@/lib/mongodb";
+import { isAdminAuthenticated } from "@/lib/adminAuth";
+import { getUserFromRequest } from "@/lib/userAuth";
 import { FileCategory, S3FileItem } from "@/types/file";
 
 export async function GET(request: NextRequest) {
@@ -24,6 +31,21 @@ export async function GET(request: NextRequest) {
     const sortOrder = searchParams.get("sortOrder") || "desc"; // 'asc' | 'desc'
 
     let files = await listS3Files();
+
+    // Attach uploader info from MongoDB
+    try {
+      await syncS3FilesWithMongo(files);
+      const metaMap = await getFileMetadataMap();
+      files = files.map((f) => {
+        const meta = metaMap.get(f.key);
+        return {
+          ...f,
+          uploadedBy: meta?.uploadedBy || f.uploadedBy || "Community",
+        };
+      });
+    } catch {
+      // ignore
+    }
 
     // Search filter
     if (search) {
@@ -100,6 +122,41 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // 1. Authorization check: Admin or authenticated user
+    const isAdmin = isAdminAuthenticated(request);
+    const sessionUser = getUserFromRequest(request);
+
+    if (!isAdmin && !sessionUser) {
+      return NextResponse.json(
+        { success: false, error: "Authentication required to delete files." },
+        { status: 401 }
+      );
+    }
+
+    // 2. Normal user permission check: only allowed to delete their own files
+    if (!isAdmin && sessionUser) {
+      const db = await getDb();
+      const fileRecord = await db.collection("files").findOne({ key });
+
+      const fileOwner = fileRecord?.uploadedBy?.toLowerCase()?.trim();
+      const currentUserName = sessionUser.username?.toLowerCase()?.trim();
+      const currentDisplayName = sessionUser.name?.toLowerCase()?.trim();
+
+      const isOwner =
+        fileOwner &&
+        (fileOwner === currentUserName || fileOwner === currentDisplayName);
+
+      if (!isOwner) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Permission denied: You can only delete files that you have uploaded.",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     await deleteS3File(key);
 
     try {
@@ -110,7 +167,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `File "${key}" successfully deleted from Amazon S3.`,
+      message: `File "${key}" successfully deleted.`,
       key,
     });
   } catch (error: unknown) {

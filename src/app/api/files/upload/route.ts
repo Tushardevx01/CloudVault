@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToS3, getS3ConfigStatus } from "@/lib/s3";
 import { recordFileUpload } from "@/lib/mongodb";
+import { getUserFromRequest } from "@/lib/userAuth";
 import { S3FileItem } from "@/types/file";
 
 // 50MB maximum single file size for standard route handler
@@ -18,10 +19,13 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const files = formData.getAll("files") as File[];
+    const sessionUser = getUserFromRequest(request);
     const userName =
       (formData.get("userName") as string)?.trim() ||
       (formData.get("uploaderName") as string)?.trim() ||
-      "Aditya";
+      sessionUser?.username ||
+      sessionUser?.name ||
+      "Community";
 
     if (!files || files.length === 0) {
       // Check single "file" fallback

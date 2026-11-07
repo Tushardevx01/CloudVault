@@ -1,512 +1,644 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
-  Search,
-  Filter,
-  ArrowUpDown,
-  LayoutGrid,
-  List,
-  Upload,
-  RefreshCw,
-  FolderOpen,
   Cloud,
-  FileQuestion,
-  AlertCircle,
-  Clock,
-  Sparkles,
+  ArrowRight,
+  Shield,
+  Zap,
+  CheckCircle2,
+  FileText,
+  Image as ImageIcon,
+  Archive,
+  ChevronRight,
+  Eye,
+  Download,
+  Lock,
+  Search,
+  FolderOpen,
+  ChevronDown,
+  Check,
 } from "lucide-react";
-import {
-  Sidebar,
-  Navbar,
-  StatsCards,
-  StorageBreakdown,
-  FileList,
-  FileGrid,
-  UploadModal,
-  FilePreviewModal,
-  DeleteConfirmModal,
-  CloudVsLocalSection,
-  SystemHealthSection,
-  ToastContainer,
-  ToastMessage,
-  ActiveTab,
-} from "@/components";
-import { FILE_CATEGORIES } from "@/lib/constants";
-import { S3FileItem, StorageStats, FileCategory } from "@/types/file";
+import { AuthModal } from "@/components/auth/AuthModal";
 
-export default function CloudVaultApp() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+export default function HomePage() {
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<"signin" | "signup" | "admin">("signup");
+  const [currentUser, setCurrentUser] = useState<{
+    username: string;
+    email: string;
+    name: string;
+  } | null>(null);
 
-  // Data states
-  const [stats, setStats] = useState<StorageStats | null>(null);
-  const [files, setFiles] = useState<S3FileItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  // FAQ accordion state
+  const [openFaq, setOpenFaq] = useState<number | null>(0);
 
-  // Filters and Sorting
-  const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<FileCategory | "all">("all");
-  const [sortBy, setSortBy] = useState<"date" | "name" | "size">("date");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
-
-  // Modals state
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [previewFile, setPreviewFile] = useState<S3FileItem | null>(null);
-  const [deleteTargetFile, setDeleteTargetFile] = useState<S3FileItem | null>(null);
-
-  // S3 Connectivity
-  const [connectionStatus, setConnectionStatus] = useState<
-    "connected" | "disconnected" | "checking"
-  >("checking");
-  const [connectionMessage, setConnectionMessage] = useState<string>("");
-
-  // Toasts
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-
-  const addToast = useCallback(
-    (toast: { type: "success" | "error" | "info"; title: string; message?: string }) => {
-      const id = `${Date.now()}-${Math.random()}`;
-      setToasts((prev) => [...prev, { id, ...toast }]);
-    },
-    []
-  );
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  // Fetch Health & Connectivity
-  const checkHealth = useCallback(async () => {
-    try {
-      const res = await fetch("/api/health");
-      const data = await res.json();
-      if (data.connected) {
-        setConnectionStatus("connected");
-        setConnectionMessage(data.message || `Connected to Amazon S3 bucket "${data.bucket}"`);
-      } else {
-        setConnectionStatus("disconnected");
-        setConnectionMessage(data.message || "AWS credentials required in .env");
-      }
-    } catch {
-      setConnectionStatus("disconnected");
-      setConnectionMessage("Health check failed. Check server logs.");
-    }
-  }, []);
-
-  // Fetch Stats & Files
-  const fetchData = useCallback(async () => {
-    try {
-      const [statsRes, filesRes] = await Promise.all([
-        fetch("/api/stats"),
-        fetch("/api/files"),
-      ]);
-
-      const statsData = await statsRes.json();
-      const filesData = await filesRes.json();
-
-      if (statsData.success && statsData.stats) {
-        setStats(statsData.stats);
-      }
-
-      if (filesData.success && filesData.files) {
-        setFiles(filesData.files);
-      }
-    } catch (err) {
-      console.error("Error fetching data:", err);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, []);
-
-  // Initial load
+  // Check if user is already logged in
   useEffect(() => {
-    checkHealth();
-    fetchData();
-  }, [checkHealth, fetchData]);
+    fetch("/api/auth/me")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
-  // Handle Refresh
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await Promise.all([checkHealth(), fetchData()]);
-    addToast({
-      type: "info",
-      title: "Data Synced",
-      message: "Refreshed file list and metrics from Amazon S3.",
-    });
+  const openAuth = (tab: "signin" | "signup" | "admin") => {
+    setAuthModalTab(tab);
+    setAuthModalOpen(true);
   };
 
-  // Filtered and Sorted Files
-  const processedFiles = useMemo(() => {
-    let result = [...files];
-
-    // Search filter
-    if (searchTerm.trim()) {
-      const lower = searchTerm.toLowerCase().trim();
-      result = result.filter(
-        (f) =>
-          f.originalName.toLowerCase().includes(lower) ||
-          f.key.toLowerCase().includes(lower)
-      );
-    }
-
-    // Category filter
-    if (categoryFilter !== "all") {
-      result = result.filter((f) => f.category === categoryFilter);
-    }
-
-    // Sorting
-    result.sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === "name") {
-        cmp = a.originalName.localeCompare(b.originalName);
-      } else if (sortBy === "size") {
-        cmp = a.size - b.size;
-      } else {
-        cmp =
-          new Date(a.lastModified).getTime() - new Date(b.lastModified).getTime();
-      }
-      return sortOrder === "asc" ? cmp : -cmp;
-    });
-
-    return result;
-  }, [files, searchTerm, categoryFilter, sortBy, sortOrder]);
-
-  // File Actions
-  const handleDownload = (file: S3FileItem) => {
-    // Direct redirect to download endpoint which issues presigned URL with attachment Content-Disposition
-    const downloadUrl = `/api/files/download?key=${encodeURIComponent(
-      file.key
-    )}&name=${encodeURIComponent(file.originalName)}`;
-    window.location.href = downloadUrl;
-
-    addToast({
-      type: "info",
-      title: "Download Initiated",
-      message: `Fetching "${file.originalName}" from Amazon S3.`,
-    });
-  };
-
-  const handleDeleteConfirm = async (file: S3FileItem) => {
-    try {
-      const res = await fetch(
-        `/api/files?key=${encodeURIComponent(file.key)}`,
-        { method: "DELETE" }
-      );
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        addToast({
-          type: "success",
-          title: "File Deleted",
-          message: `"${file.originalName}" was permanently removed from S3.`,
-        });
-        await fetchData();
-      } else {
-        addToast({
-          type: "error",
-          title: "Deletion Failed",
-          message: data.error || "Could not delete file from S3.",
-        });
-      }
-    } catch {
-      addToast({
-        type: "error",
-        title: "Network Error",
-        message: "Failed to connect to delete endpoint.",
-      });
-    }
-  };
+  const faqs = [
+    {
+      q: "What types of files can I store in CloudVault?",
+      a: "CloudVault supports all standard file formats up to 50MB per file, including PDF documents, high-resolution images (JPEG, PNG, SVG, WebP), video & audio media, ZIP/TAR archives, and source code files.",
+    },
+    {
+      q: "Can I preview files directly in the browser?",
+      a: "Yes. CloudVault includes built-in inline previews for PDF documents, images, and text/code files, allowing you to inspect your files instantly without downloading them to your local device.",
+    },
+    {
+      q: "How does CloudVault ensure file security and privacy?",
+      a: "All objects are stored in private cloud storage with encryption at rest. Downloads and previews are authorized via temporary cryptographic signatures that expire automatically, preventing unauthorized access.",
+    },
+    {
+      q: "How does user registration work?",
+      a: "Simply choose a username, email, and password. Our account onboarding validates username availability instantly in real time so you can claim your vault and start uploading immediately.",
+    },
+    {
+      q: "Is there an administrative console for management?",
+      a: "Yes. System administrators have access to a dedicated Admin Console to monitor storage quotas, inspect user object records, and oversee database integrity.",
+    },
+  ];
 
   return (
-    <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex">
-      {/* Toast System */}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-
-      {/* Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        onOpenUpload={() => setIsUploadOpen(true)}
-        stats={stats}
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Navbar */}
-        <Navbar
-          activeTab={activeTab}
-          onToggleSidebar={() => setSidebarOpen(true)}
-          onOpenUpload={() => setIsUploadOpen(true)}
-          onRefresh={handleRefresh}
-          isRefreshing={isRefreshing}
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-          connectionStatus={connectionStatus}
-          connectionMessage={connectionMessage}
-          region={stats?.region || "ap-south-1"}
-        />
-
-        {/* Content View Container */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full space-y-6">
-          {/* Missing Credentials Diagnostic Banner */}
-          {connectionStatus === "disconnected" && (
-            <div className="p-4 sm:p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-4 text-amber-200">
-              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-              <div className="flex-1 text-xs sm:text-sm">
-                <p className="font-bold text-amber-100">
-                  Amazon S3 Credentials Pending in .env
-                </p>
-                <p className="text-amber-300/80 mt-1 leading-relaxed">
-                  To interact with the live AWS S3 bucket{" "}
-                  <code className="bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-200 font-mono">
-                    tushardevx01
-                  </code>
-                  , configure your <code className="font-mono text-amber-100 font-bold">.env</code> file with valid AWS credentials.
-                </p>
-              </div>
+    <div
+      className="min-h-screen bg-slate-50 text-slate-900 flex flex-col selection:bg-sky-500 selection:text-white"
+      suppressHydrationWarning
+    >
+      {/* 1. TOP NAVIGATION */}
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-md border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          {/* Brand Logo */}
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center text-white shadow-xs group-hover:bg-sky-500 transition-colors">
+              <Cloud className="w-5 h-5" />
             </div>
-          )}
+            <span className="font-bold text-lg text-slate-900 tracking-tight">
+              CloudVault
+            </span>
+          </Link>
 
-          {/* TAB: DASHBOARD */}
-          {activeTab === "dashboard" && (
-            <div className="space-y-6">
-              {/* Stat Cards */}
-              <StatsCards
-                stats={stats}
-                isLoading={isLoading}
-                onViewFiles={() => setActiveTab("files")}
-                onOpenUpload={() => setIsUploadOpen(true)}
-                connectionStatus={connectionStatus}
-              />
+          {/* Navigation Links */}
+          <nav className="hidden md:flex items-center gap-8 text-xs font-semibold text-slate-600">
+            <a href="#features" className="hover:text-slate-900 transition-colors">
+              Features
+            </a>
+            <a href="#preview" className="hover:text-slate-900 transition-colors">
+              Workspace
+            </a>
+            <a href="#how-it-works" className="hover:text-slate-900 transition-colors">
+              How It Works
+            </a>
+            <a href="#security" className="hover:text-slate-900 transition-colors">
+              Security
+            </a>
+            <a href="#faq" className="hover:text-slate-900 transition-colors">
+              FAQ
+            </a>
+          </nav>
 
-              {/* Storage Category Distribution */}
-              <StorageBreakdown
-                stats={stats}
-                onFilterCategory={(cat) => {
-                  setCategoryFilter(cat);
-                  setActiveTab("files");
-                }}
-              />
+          {/* Action: Sign In for guests, Go to Dashboard for authenticated users */}
+          <div className="flex items-center gap-3">
+            {currentUser ? (
+              <Link
+                href="/dashboard"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs transition-colors"
+              >
+                <span>Go to Dashboard</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            ) : (
+              <button
+                onClick={() => openAuth("signin")}
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+              >
+                Sign In
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
 
-              {/* Recent Uploads Section */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-sky-400" />
-                    <h2 className="text-base font-bold text-white tracking-tight">
-                      Recent Uploads to Amazon S3
-                    </h2>
-                  </div>
-                  {files.length > 5 && (
-                    <button
-                      onClick={() => setActiveTab("files")}
-                      className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors cursor-pointer"
-                    >
-                      View all {files.length} files →
-                    </button>
-                  )}
+      {/* MAIN CONTENT */}
+      <main className="flex-1">
+        {/* 2. HERO SECTION */}
+        <section className="relative overflow-hidden pt-16 pb-20 sm:pt-24 sm:pb-28 bg-white border-b border-slate-200/80">
+          <div className="absolute inset-0 bg-dot-pattern opacity-60 pointer-events-none" />
+
+          <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            {/* Announcement Pill */}
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-medium mb-6 shadow-2xs">
+              <span className="w-2 h-2 rounded-full bg-sky-500" />
+              <span>Next-Gen Cloud Storage • Fast, Private & Frictionless</span>
+            </div>
+
+            {/* Headline */}
+            <h1 className="text-4xl sm:text-6xl font-extrabold text-slate-900 tracking-tight leading-[1.12]">
+              Your files, everywhere. <br className="hidden sm:block" />
+              <span className="text-sky-600">
+                Built for speed, engineered for privacy.
+              </span>
+            </h1>
+
+            {/* Subhead */}
+            <p className="mt-6 text-base sm:text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
+              Store, preview, and organize your documents, media, and archives in a distraction-free cloud workspace.
+              Upload in seconds, stream inline, and keep your data safe.
+            </p>
+
+            {/* Primary Action Button: Only ONE Get Started button */}
+            <div className="mt-8 flex items-center justify-center">
+              <button
+                onClick={() => openAuth("signup")}
+                className="flex items-center gap-2 px-7 py-3.5 rounded-2xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm font-semibold shadow-sm transition-all cursor-pointer hover:-translate-y-0.5"
+              >
+                <span>Get Started</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Trust Badges */}
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-500 font-medium">
+              <span className="flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-emerald-600" />
+                No credit card required
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-emerald-600" />
+                Up to 50MB per file
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-emerald-600" />
+                Private cloud encryption
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* 3. INTERACTIVE HERO WORKSPACE PREVIEW */}
+        <section id="preview" className="py-16 sm:py-20 bg-slate-50 border-b border-slate-200/80">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center max-w-2xl mx-auto mb-10">
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                A Clean Workspace for All Your Content
+              </h2>
+              <p className="mt-2 text-xs sm:text-sm text-slate-600">
+                Experience high-performance cloud storage designed with clarity and purpose.
+              </p>
+            </div>
+
+            {/* Realistic Application Window */}
+            <div className="rounded-3xl border border-slate-200 shadow-xl overflow-hidden bg-white">
+              {/* Window Title Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-slate-300" />
+                  <span className="w-3 h-3 rounded-full bg-slate-300" />
+                  <span className="w-3 h-3 rounded-full bg-slate-300" />
+                  <span className="ml-3 text-xs font-semibold text-slate-600 font-mono">
+                    CloudVault • Personal Workspace
+                  </span>
                 </div>
-
-                <FileList
-                  files={files.slice(0, 5)}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                />
+                <button
+                  onClick={() => openAuth("signup")}
+                  className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1 cursor-pointer"
+                >
+                  <span>Open Interactive App</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
               </div>
-            </div>
-          )}
 
-          {/* TAB: ALL FILES */}
-          {activeTab === "files" && (
-            <div className="space-y-4">
-              {/* Filter & Search Toolbar */}
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
-                {/* Search & Actions Row */}
+              {/* Window Interior */}
+              <div className="p-6 sm:p-8 space-y-6">
+                {/* Search & Category Pills Simulation */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type="text"
-                      placeholder="Search files by name or object key..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full bg-slate-800/80 border border-slate-700/80 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+                      readOnly
+                      value="quarterly_report"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-800"
                     />
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* Sort Dropdown */}
-                    <div className="flex items-center bg-slate-800/80 border border-slate-700/80 rounded-xl px-2 py-1.5 text-xs">
-                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 mr-1.5" />
-                      <select
-                        value={sortBy}
-                        onChange={(e) =>
-                          setSortBy(e.target.value as "date" | "name" | "size")
-                        }
-                        className="bg-transparent text-slate-200 focus:outline-none cursor-pointer text-xs"
-                      >
-                        <option value="date" className="bg-slate-900">
-                          Date
-                        </option>
-                        <option value="name" className="bg-slate-900">
-                          Name
-                        </option>
-                        <option value="size" className="bg-slate-900">
-                          Size
-                        </option>
-                      </select>
-                      <button
-                        onClick={() =>
-                          setSortOrder((prev) =>
-                            prev === "asc" ? "desc" : "asc"
-                          )
-                        }
-                        className="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 hover:text-white"
-                        title="Toggle sort direction"
-                      >
-                        {sortOrder.toUpperCase()}
-                      </button>
-                    </div>
-
-                    {/* View Switch: Table / Grid */}
-                    <div className="flex items-center bg-slate-800/80 border border-slate-700/80 rounded-xl p-0.5">
-                      <button
-                        onClick={() => setViewMode("table")}
-                        className={`p-1.5 rounded-lg transition-colors ${
-                          viewMode === "table"
-                            ? "bg-slate-700 text-white"
-                            : "text-slate-400 hover:text-slate-200"
-                        }`}
-                        title="Table View"
-                      >
-                        <List className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setViewMode("grid")}
-                        className={`p-1.5 rounded-lg transition-colors ${
-                          viewMode === "grid"
-                            ? "bg-slate-700 text-white"
-                            : "text-slate-400 hover:text-slate-200"
-                        }`}
-                        title="Grid View"
-                      >
-                        <LayoutGrid className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                  <div className="flex items-center gap-1.5 overflow-x-auto">
+                    <span className="px-3 py-1 rounded-xl text-xs font-semibold bg-sky-600 text-white shadow-2xs">
+                      All Files
+                    </span>
+                    <span className="px-3 py-1 rounded-xl text-xs font-medium bg-slate-100 text-slate-600">
+                      Documents
+                    </span>
+                    <span className="px-3 py-1 rounded-xl text-xs font-medium bg-slate-100 text-slate-600">
+                      Images
+                    </span>
+                    <span className="px-3 py-1 rounded-xl text-xs font-medium bg-slate-100 text-slate-600">
+                      Archives
+                    </span>
                   </div>
                 </div>
 
-                {/* Category Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1">
-                  {FILE_CATEGORIES.map((cat) => {
-                    const isSelected = categoryFilter === cat.id;
+                {/* File List Cards */}
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs divide-y divide-slate-100">
+                  {[
+                    {
+                      name: "quarterly_financial_report_2026.pdf",
+                      category: "document",
+                      size: "4.2 MB",
+                      time: "15 minutes ago",
+                      icon: FileText,
+                      badge: "PDF Document",
+                    },
+                    {
+                      name: "product_brand_identity_guide.png",
+                      category: "image",
+                      size: "2.1 MB",
+                      time: "2 hours ago",
+                      icon: ImageIcon,
+                      badge: "PNG Image",
+                    },
+                    {
+                      name: "cloudvault_project_assets.zip",
+                      category: "archive",
+                      size: "18.9 MB",
+                      time: "Yesterday",
+                      icon: Archive,
+                      badge: "ZIP Archive",
+                    },
+                  ].map((item, idx) => {
+                    const Icon = item.icon;
                     return (
-                      <button
-                        key={cat.id}
-                        onClick={() => setCategoryFilter(cat.id)}
-                        className={`px-3 py-1 rounded-xl text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
-                          isSelected
-                            ? "bg-sky-500 text-white shadow-xs"
-                            : "bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-                        }`}
+                      <div
+                        key={idx}
+                        className="p-4 flex items-center justify-between hover:bg-slate-50/60 transition-colors"
                       >
-                        {cat.label}
-                      </button>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-600 shrink-0">
+                            <Icon className="w-4 h-4 text-sky-600" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-900 truncate">
+                              {item.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              Uploaded {item.time}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                            {item.badge}
+                          </span>
+                          <span className="text-xs font-mono text-slate-600">
+                            {item.size}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <span className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 bg-slate-50 border border-slate-200">
+                              <Eye className="w-3.5 h-3.5" />
+                            </span>
+                            <span className="p-1.5 rounded-lg text-slate-400 hover:text-sky-600 bg-slate-50 border border-slate-200">
+                              <Download className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
 
-              {/* Results Summary */}
-              <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-                <span>
-                  Showing {processedFiles.length} of {files.length} file(s)
-                </span>
-                {(searchTerm || categoryFilter !== "all") && (
-                  <button
-                    onClick={() => {
-                      setSearchTerm("");
-                      setCategoryFilter("all");
-                    }}
-                    className="text-sky-400 hover:text-sky-300 transition-colors"
-                  >
-                    Reset filters
-                  </button>
-                )}
+        {/* 4. MODERN BENTO GRID FEATURE MATRIX */}
+        <section id="features" className="py-16 sm:py-24 bg-white border-b border-slate-200/80">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center max-w-2xl mx-auto mb-16">
+              <span className="text-xs font-bold uppercase tracking-wider text-sky-600">
+                Core Capabilities
+              </span>
+              <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mt-2">
+                Everything You Need, Nothing You Don&apos;t.
+              </h2>
+              <p className="mt-3 text-xs sm:text-sm text-slate-600">
+                Crafted to provide an effortless storage experience with modern tools and zero bloat.
+              </p>
+            </div>
+
+            {/* Bento Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Bento Card 1: Wide 2-Cols */}
+              <div className="md:col-span-2 p-8 rounded-3xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="w-10 h-10 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center">
+                    <Eye className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">
+                    Instant In-Browser Streaming & Previews
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 max-w-lg leading-relaxed">
+                    Inspect PDF documents, stream audio and video, browse photos, and review source code
+                    directly inside your browser without waiting for long download queues.
+                  </p>
+                </div>
+
+                <div className="mt-6 pt-4 border-t border-slate-200 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    PDF Reader
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Image Zoom
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Code Highlighting
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Zero Download Wait
+                  </span>
+                </div>
               </div>
 
-              {/* View Rendering */}
-              {viewMode === "table" ? (
-                <FileList
-                  files={processedFiles}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                />
-              ) : (
-                <FileGrid
-                  files={processedFiles}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                />
-              )}
+              {/* Bento Card 2: 1-Col */}
+              <div className="p-8 rounded-3xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Private by Default
+                  </h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Objects are stored in private cloud storage. Temporary access tokens expire automatically to safeguard your sensitive documents.
+                  </p>
+                </div>
+                <div className="mt-6 pt-4 border-t border-slate-200 text-xs font-mono text-emerald-700 font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>256-bit Encryption</span>
+                </div>
+              </div>
+
+              {/* Bento Card 3: 1-Col */}
+              <div className="p-8 rounded-3xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                    <Zap className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Multi-File Drag & Drop
+                  </h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Upload multiple files simultaneously with drag-and-drop support. Live queue status tracks each item as it uploads.
+                  </p>
+                </div>
+                <div className="mt-6 pt-4 border-t border-slate-200 text-xs font-mono text-slate-600 font-medium">
+                  Up to 50MB per file
+                </div>
+              </div>
+
+              {/* Bento Card 4: Wide 2-Cols */}
+              <div className="md:col-span-2 p-8 rounded-3xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                    <FolderOpen className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">
+                    Smart Organization & Instant Search
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 max-w-lg leading-relaxed">
+                    Filter files effortlessly across Documents, Images, Media, Code, and Archives.
+                    Search by filename or key with instant debounced filtering.
+                  </p>
+                </div>
+
+                <div className="mt-6 pt-4 border-t border-slate-200 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Table & Grid Views
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Sort by Date, Name, Size
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                    Instant Search
+                  </span>
+                </div>
+              </div>
             </div>
-          )}
+          </div>
+        </section>
 
-          {/* TAB: ACADEMIC CLOUD CONCEPTS */}
-          {activeTab === "cloud-concepts" && <CloudVsLocalSection />}
+        {/* 5. HOW IT WORKS WORKFLOW */}
+        <section id="how-it-works" className="py-16 sm:py-24 bg-slate-50 border-b border-slate-200/80">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center max-w-2xl mx-auto mb-16">
+              <span className="text-xs font-bold uppercase tracking-wider text-sky-600">
+                Simple Workflow
+              </span>
+              <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mt-2">
+                Get Started in 3 Simple Steps
+              </h2>
+            </div>
 
-          {/* TAB: SYSTEM & S3 HEALTH */}
-          {activeTab === "system" && (
-            <SystemHealthSection
-              stats={stats}
-              connectionStatus={connectionStatus}
-              connectionMessage={connectionMessage}
-              onCheckHealth={async () => {
-                await checkHealth();
-                await fetchData();
-              }}
-            />
-          )}
-        </main>
-      </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+                <div className="w-8 h-8 rounded-xl bg-sky-600 text-white font-bold text-xs flex items-center justify-center">
+                  01
+                </div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Create Your Account
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Sign up with your username, email, and password. Your personal cloud vault is provisioned in seconds.
+                </p>
+              </div>
 
-      {/* Upload Modal */}
-      <UploadModal
-        isOpen={isUploadOpen}
-        onClose={() => setIsUploadOpen(false)}
-        onUploadSuccess={fetchData}
-        onAddToast={addToast}
-      />
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+                <div className="w-8 h-8 rounded-xl bg-sky-600 text-white font-bold text-xs flex items-center justify-center">
+                  02
+                </div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Upload Documents & Media
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Drag and drop your files. CloudVault automatically categorizes and stores them with private encryption.
+                </p>
+              </div>
 
-      {/* File Preview Modal */}
-      <FilePreviewModal
-        file={previewFile}
-        isOpen={Boolean(previewFile)}
-        onClose={() => setPreviewFile(null)}
-        onDownload={handleDownload}
-      />
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+                <div className="w-8 h-8 rounded-xl bg-sky-600 text-white font-bold text-xs flex items-center justify-center">
+                  03
+                </div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Preview & Access Anywhere
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Open PDF documents, view images, or download your assets from any modern browser with zero friction.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmModal
-        file={deleteTargetFile}
-        isOpen={Boolean(deleteTargetFile)}
-        onClose={() => setDeleteTargetFile(null)}
-        onConfirm={handleDeleteConfirm}
+        {/* 6. SECURITY & RELIABILITY */}
+        <section id="security" className="py-16 sm:py-20 bg-white border-b border-slate-200/80">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="bg-slate-900 text-white rounded-3xl p-8 sm:p-12 shadow-xl flex flex-col md:flex-row items-center justify-between gap-8">
+              <div className="space-y-4 max-w-xl">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 text-emerald-400 text-xs font-semibold border border-slate-700">
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Enterprise Cloud Security</span>
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                  Your Data Stays Private and Protected.
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  CloudVault enforces strict server-side authorization. Object URLs expire automatically after 15 minutes,
+                  preventing unauthorized hotlinking or exposure.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 w-full md:w-auto shrink-0">
+                <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700 text-center">
+                  <span className="text-2xl font-bold font-mono text-white">99.99%</span>
+                  <p className="text-[11px] text-slate-400 mt-1">Uptime Reliability</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700 text-center">
+                  <span className="text-2xl font-bold font-mono text-emerald-400">15 min</span>
+                  <p className="text-[11px] text-slate-400 mt-1">Token Expiration</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* 7. FREQUENTLY ASKED QUESTIONS */}
+        <section id="faq" className="py-16 sm:py-24 bg-slate-50 border-b border-slate-200/80">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center max-w-2xl mx-auto mb-12">
+              <span className="text-xs font-bold uppercase tracking-wider text-sky-600">
+                Questions & Answers
+              </span>
+              <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-2">
+                Frequently Asked Questions
+              </h2>
+            </div>
+
+            <div className="space-y-3">
+              {faqs.map((faq, idx) => {
+                const isOpen = openFaq === idx;
+                return (
+                  <div
+                    key={idx}
+                    className="rounded-2xl border border-slate-200 bg-white overflow-hidden transition-all shadow-2xs"
+                  >
+                    <button
+                      onClick={() => setOpenFaq(isOpen ? null : idx)}
+                      className="w-full p-5 text-left flex items-center justify-between gap-4 cursor-pointer"
+                    >
+                      <span className="text-sm font-bold text-slate-900">
+                        {faq.q}
+                      </span>
+                      <ChevronDown
+                        className={`w-4 h-4 text-slate-400 transition-transform ${
+                          isOpen ? "rotate-180 text-sky-600" : ""
+                        }`}
+                      />
+                    </button>
+                    {isOpen && (
+                      <div className="px-5 pb-5 text-xs text-slate-600 leading-relaxed border-t border-slate-100 pt-3">
+                        {faq.a}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* 8. FINAL HIGH-CONVERSION CTA */}
+        <section className="py-20 bg-white text-center">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+              Ready to organize your files with zero friction?
+            </h2>
+            <p className="text-sm text-slate-600 max-w-lg mx-auto">
+              Create your free account today and experience clean, modern cloud object storage.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={() => openAuth("signup")}
+                className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold shadow-sm transition-all cursor-pointer hover:-translate-y-0.5"
+              >
+                <span>Create Free Account</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {/* 9. PROFESSIONAL FOOTER */}
+      <footer className="border-t border-slate-200 bg-slate-50 py-10 text-xs text-slate-500">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center">
+                <Cloud className="w-4 h-4" />
+              </div>
+              <span className="font-bold text-base text-slate-900">CloudVault</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-6 font-medium text-slate-600">
+              <a href="#features" className="hover:text-slate-900 transition-colors">
+                Features
+              </a>
+              <a href="#preview" className="hover:text-slate-900 transition-colors">
+                Workspace
+              </a>
+              <a href="#how-it-works" className="hover:text-slate-900 transition-colors">
+                How It Works
+              </a>
+              <a href="#faq" className="hover:text-slate-900 transition-colors">
+                FAQ
+              </a>
+              <button
+                onClick={() => openAuth("admin")}
+                className="hover:text-indigo-600 transition-colors cursor-pointer"
+              >
+                Admin Access
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400">
+            <p>© 2026 CloudVault. Modern Cloud Object Storage Platform.</p>
+            <p>Designed for speed, reliability & effortless usability.</p>
+          </div>
+        </div>
+      </footer>
+
+      {/* Auth Modal (Sign Up, Sign In, Admin) */}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        defaultTab={authModalTab}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+        }}
       />
     </div>
   );

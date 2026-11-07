@@ -9,11 +9,10 @@ import {
   Loader2,
   Trash2,
   Cloud,
-  User,
 } from "lucide-react";
 import { formatBytes, getFileCategory } from "@/lib/utils";
 import { FileIcon } from "../files/FileIcon";
-import { MAX_FILE_SIZE_BYTES, DEFAULT_BUCKET_NAME, DEFAULT_AWS_REGION } from "@/lib/constants";
+import { MAX_FILE_SIZE_BYTES } from "@/lib/constants";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -24,6 +23,7 @@ interface UploadModalProps {
     title: string;
     message?: string;
   }) => void;
+  currentUsername?: string;
 }
 
 interface QueuedFile {
@@ -38,21 +38,38 @@ export function UploadModal({
   onClose,
   onUploadSuccess,
   onAddToast,
+  currentUsername,
 }: UploadModalProps) {
   const [dragActive, setDragActive] = useState(false);
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploaderName, setUploaderName] = useState("Aditya");
+  const [uploaderName, setUploaderName] = useState(currentUsername || "User");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (currentUsername) {
+      setUploaderName(currentUsername);
+      return;
+    }
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("cloudvault_uploader_name");
-      if (saved && saved.trim()) {
-        setUploaderName(saved.trim());
+      const savedUser = localStorage.getItem("cloudvault_user");
+      if (savedUser) {
+        try {
+          const parsed = JSON.parse(savedUser);
+          if (parsed.username || parsed.name) {
+            setUploaderName(parsed.username || parsed.name);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const savedName = localStorage.getItem("cloudvault_uploader_name");
+      if (savedName && savedName.trim()) {
+        setUploaderName(savedName.trim());
       }
     }
-  }, []);
+  }, [currentUsername, isOpen]);
 
   if (!isOpen) return null;
 
@@ -125,7 +142,7 @@ export function UploadModal({
     setIsUploading(true);
 
     const formData = new FormData();
-    formData.append("userName", uploaderName.trim() || "Aditya");
+    formData.append("userName", (currentUsername || uploaderName).trim() || "User");
     pendingFiles.forEach((item) => {
       formData.append("files", item.file);
     });
@@ -152,13 +169,13 @@ export function UploadModal({
         onAddToast({
           type: "success",
           title: "Upload Completed",
-          message: `Successfully uploaded ${successCount} file(s) to Amazon S3.`,
+          message: `Successfully uploaded ${successCount} file(s) to your cloud vault.`,
         });
         onUploadSuccess();
         setTimeout(() => {
           onClose();
           setQueue([]);
-        }, 1200);
+        }, 1000);
       } else {
         setQueue((prev) =>
           prev.map((item) => ({
@@ -170,7 +187,7 @@ export function UploadModal({
         onAddToast({
           type: "error",
           title: "Upload Error",
-          message: result.error || "Could not complete upload to S3.",
+          message: result.error || "Could not complete upload to cloud storage.",
         });
       }
     } catch (err: unknown) {
@@ -195,27 +212,27 @@ export function UploadModal({
   const totalQueuedBytes = queue.reduce((acc, curr) => acc + curr.file.size, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative w-full max-w-xl bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+            <div className="w-8 h-8 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600">
               <Cloud className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight">
-                Upload to Amazon S3
+              <h2 className="text-base font-bold text-slate-900 tracking-tight">
+                Upload Files
               </h2>
-              <p className="text-xs text-slate-400">
-                Target Bucket: <span className="text-slate-200 font-mono">{DEFAULT_BUCKET_NAME}</span> ({DEFAULT_AWS_REGION})
+              <p className="text-xs text-slate-500">
+                Add documents, media, or archives to your secure vault (up to 50MB each)
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={isUploading}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-40 cursor-pointer"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-40 cursor-pointer"
             aria-label="Close modal"
           >
             <X className="w-5 h-5" />
@@ -224,32 +241,6 @@ export function UploadModal({
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-4 flex-1">
-          {/* Uploader Name Field */}
-          <div className="p-3.5 rounded-xl bg-slate-800/50 border border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2">
-              <User className="w-4 h-4 text-sky-400" />
-              <label htmlFor="uploaderName" className="text-xs font-semibold text-slate-200">
-                Uploading As:
-              </label>
-            </div>
-            <div className="flex items-center gap-1.5 flex-1 max-w-xs">
-              <input
-                id="uploaderName"
-                type="text"
-                value={uploaderName}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setUploaderName(val);
-                  if (typeof window !== "undefined") {
-                    localStorage.setItem("cloudvault_uploader_name", val);
-                  }
-                }}
-                placeholder="User / Contributor Name"
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
-              />
-            </div>
-          </div>
-
           {/* Dropzone */}
           <div
             onDragEnter={handleDrag}
@@ -259,8 +250,8 @@ export function UploadModal({
             onClick={() => fileInputRef.current?.click()}
             className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center ${
               dragActive
-                ? "border-sky-400 bg-sky-500/10 scale-[0.99]"
-                : "border-slate-700/80 hover:border-slate-600 bg-slate-800/30 hover:bg-slate-800/50"
+                ? "border-sky-500 bg-sky-50 scale-[0.99]"
+                : "border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50"
             }`}
           >
             <input
@@ -270,31 +261,31 @@ export function UploadModal({
               onChange={(e) => handleFiles(e.target.files)}
               className="hidden"
             />
-            <div className="w-12 h-12 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 mb-3">
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 mb-3 shadow-xs">
               <UploadCloud className="w-6 h-6" />
             </div>
-            <p className="text-sm font-semibold text-white">
+            <p className="text-sm font-semibold text-slate-800">
               Drag and drop files here, or{" "}
-              <span className="text-sky-400 underline underline-offset-2">
+              <span className="text-sky-600 underline underline-offset-2">
                 browse
               </span>
             </p>
-            <p className="text-xs text-slate-400 mt-1">
-              Supports multiple files up to 50MB each. Stored directly in S3.
+            <p className="text-xs text-slate-500 mt-1">
+              Supports multiple files up to 50MB each. Securely stored with private access control.
             </p>
           </div>
 
           {/* Queue List */}
           {queue.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1">
                 <span>
                   Files to upload: {queue.length} ({formatBytes(totalQueuedBytes)})
                 </span>
                 {!isUploading && (
                   <button
                     onClick={clearQueue}
-                    className="text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
+                    className="text-rose-600 hover:text-rose-700 font-medium transition-colors cursor-pointer"
                   >
                     Clear all
                   </button>
@@ -307,7 +298,7 @@ export function UploadModal({
                   return (
                     <div
                       key={item.id}
-                      className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-between gap-3 text-xs"
+                      className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 text-xs"
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <FileIcon
@@ -316,10 +307,10 @@ export function UploadModal({
                           className="w-4 h-4 shrink-0"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-white truncate">
+                          <p className="font-semibold text-slate-900 truncate">
                             {item.file.name}
                           </p>
-                          <p className="text-[11px] text-slate-400 font-mono">
+                          <p className="text-[11px] text-slate-500 font-mono">
                             {formatBytes(item.file.size)}
                           </p>
                         </div>
@@ -328,20 +319,20 @@ export function UploadModal({
                       {/* Status indicator */}
                       <div className="flex items-center gap-2 shrink-0">
                         {item.status === "uploading" && (
-                          <span className="flex items-center gap-1 text-sky-400">
+                          <span className="flex items-center gap-1 text-sky-600 font-medium">
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             <span>Uploading...</span>
                           </span>
                         )}
                         {item.status === "success" && (
-                          <span className="flex items-center gap-1 text-emerald-400">
+                          <span className="flex items-center gap-1 text-emerald-600 font-medium">
                             <CheckCircle2 className="w-4 h-4" />
                             <span>Uploaded</span>
                           </span>
                         )}
                         {item.status === "error" && (
                           <span
-                            className="flex items-center gap-1 text-rose-400"
+                            className="flex items-center gap-1 text-rose-600 font-medium"
                             title={item.errorMessage}
                           >
                             <AlertCircle className="w-4 h-4" />
@@ -351,7 +342,7 @@ export function UploadModal({
                         {item.status === "idle" && !isUploading && (
                           <button
                             onClick={() => removeQueuedFile(item.id)}
-                            className="p-1 rounded text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                            className="p-1 rounded text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                             aria-label="Remove file"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -367,23 +358,23 @@ export function UploadModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/80 flex items-center justify-end gap-3">
+        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/60 flex items-center justify-end gap-3">
           <button
             onClick={onClose}
             disabled={isUploading}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition-colors disabled:opacity-50 cursor-pointer"
           >
             Cancel
           </button>
           <button
             onClick={startUpload}
             disabled={isUploading || queue.length === 0}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 active:bg-sky-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-semibold shadow-md shadow-sky-500/20 transition-all cursor-pointer disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed"
           >
             {isUploading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Uploading to S3...</span>
+                <span>Uploading files...</span>
               </>
             ) : (
               <>
