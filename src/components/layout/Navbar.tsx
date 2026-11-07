@@ -1,13 +1,11 @@
 "use client";
 
 import React from "react";
-import Link from "next/link";
 import {
   Menu,
   RefreshCw,
   Search,
   Upload,
-  Shield,
   User,
   LogOut,
 } from "lucide-react";
@@ -98,7 +96,7 @@ export function Navbar({
           </button>
 
           {/* User Profile or Admin Link */}
-          {currentUser ? (
+          {currentUser && (
             <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 pl-2.5 pr-1.5 py-1 rounded-xl text-xs">
               <User className="w-3.5 h-3.5 text-sky-600" />
               <span className="font-semibold text-slate-800">{currentUser.name}</span>
@@ -113,15 +111,6 @@ export function Navbar({
                 </button>
               )}
             </div>
-          ) : (
-            <Link
-              href="/admin"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-50 text-indigo-700 text-xs font-semibold transition-colors"
-              title="Open Admin Console"
-            >
-              <Shield className="w-3.5 h-3.5 text-indigo-600" />
-              <span className="hidden md:inline">Admin</span>
-            </Link>
           )}
 
           {/* Upload Button */}

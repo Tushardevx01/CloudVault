@@ -9,7 +9,6 @@ import {
   Upload,
   HardDrive,
   X,
-  Shield,
   LogOut,
 } from "lucide-react";
 import { StorageStats } from "@/types/file";
@@ -141,21 +140,6 @@ export function Sidebar({
               </button>
             );
           })}
-
-          <div className="pt-3">
-            <div className="px-3 pb-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-              Management
-            </div>
-            <Link
-              href="/admin"
-              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-all"
-            >
-              <div className="flex items-center gap-2.5">
-                <Shield className="w-4 h-4 text-slate-400" />
-                <span>Admin Console</span>
-              </div>
-            </Link>
-          </div>
         </nav>
 
         {/* Clean Storage Usage Widget (No raw S3 bucket jargon) */}

@@ -150,7 +150,7 @@ export default function UserDashboard() {
     addToast({
       type: "info",
       title: "Data Synced",
-      message: "Refreshed cloud storage files from Amazon S3.",
+      message: "Refreshed cloud storage files.",
     });
   };
 
@@ -205,7 +205,7 @@ export default function UserDashboard() {
     addToast({
       type: "info",
       title: "Download Initiated",
-      message: `Fetching "${file.originalName}" from Amazon S3.`,
+      message: `Fetching "${file.originalName}" from cloud storage.`,
     });
   };
 
@@ -221,14 +221,14 @@ export default function UserDashboard() {
         addToast({
           type: "success",
           title: "File Deleted",
-          message: `"${file.originalName}" permanently removed from S3.`,
+          message: `"${file.originalName}" permanently removed.`,
         });
         await fetchData();
       } else {
         addToast({
           type: "error",
           title: "Deletion Failed",
-          message: data.error || "Could not delete file from S3.",
+          message: data.error || "Could not delete file from cloud storage.",
         });
       }
     } catch {
@@ -297,31 +297,73 @@ export default function UserDashboard() {
 
               {/* Recent Uploads Section */}
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Clock className="w-5 h-5 text-sky-600" />
                     <h2 className="text-base font-bold text-slate-900 tracking-tight">
                       Recent Uploads
                     </h2>
                   </div>
-                  {files.length > 5 && (
-                    <button
-                      onClick={() => setActiveTab("files")}
-                      className="text-xs font-semibold text-sky-600 hover:text-sky-700 transition-colors cursor-pointer"
-                    >
-                      View all {files.length} files →
-                    </button>
-                  )}
+
+                  <div className="flex items-center gap-2.5">
+                    {/* View Switch: List / Grid */}
+                    <div className="flex items-center bg-white border border-slate-200 rounded-xl p-0.5 shadow-2xs">
+                      <button
+                        onClick={() => setViewMode("table")}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          viewMode === "table"
+                            ? "bg-slate-100 text-slate-900 shadow-xs"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                        title="List View"
+                      >
+                        <List className="w-3.5 h-3.5" />
+                        <span>List</span>
+                      </button>
+                      <button
+                        onClick={() => setViewMode("grid")}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          viewMode === "grid"
+                            ? "bg-slate-100 text-slate-900 shadow-xs"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                        title="Grid View"
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Grid</span>
+                      </button>
+                    </div>
+
+                    {files.length > 6 && (
+                      <button
+                        onClick={() => setActiveTab("files")}
+                        className="text-xs font-semibold text-sky-600 hover:text-sky-700 transition-colors cursor-pointer"
+                      >
+                        View all {files.length} files →
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <FileList
-                  files={files.slice(0, 5)}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                />
+                {viewMode === "table" ? (
+                  <FileList
+                    files={files.slice(0, 6)}
+                    isLoading={isLoading}
+                    onPreview={(f) => setPreviewFile(f)}
+                    onDownload={handleDownload}
+                    onDelete={(f) => setDeleteTargetFile(f)}
+                    onOpenUpload={() => setIsUploadOpen(true)}
+                  />
+                ) : (
+                  <FileGrid
+                    files={files.slice(0, 6)}
+                    isLoading={isLoading}
+                    onPreview={(f) => setPreviewFile(f)}
+                    onDownload={handleDownload}
+                    onDelete={(f) => setDeleteTargetFile(f)}
+                    onOpenUpload={() => setIsUploadOpen(true)}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -372,29 +414,31 @@ export default function UserDashboard() {
                       </button>
                     </div>
 
-                    {/* View Switch: Table / Grid */}
-                    <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-0.5">
+                    {/* View Switch: List / Grid */}
+                    <div className="flex items-center bg-slate-100 border border-slate-200 rounded-xl p-0.5 shadow-2xs">
                       <button
                         onClick={() => setViewMode("table")}
-                        className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                           viewMode === "table"
                             ? "bg-white text-slate-900 shadow-xs"
-                            : "text-slate-400 hover:text-slate-700"
+                            : "text-slate-500 hover:text-slate-800"
                         }`}
-                        title="Table View"
+                        title="List View"
                       >
                         <List className="w-3.5 h-3.5" />
+                        <span>List</span>
                       </button>
                       <button
                         onClick={() => setViewMode("grid")}
-                        className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                           viewMode === "grid"
                             ? "bg-white text-slate-900 shadow-xs"
-                            : "text-slate-400 hover:text-slate-700"
+                            : "text-slate-500 hover:text-slate-800"
                         }`}
                         title="Grid View"
                       >
                         <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Grid</span>
                       </button>
                     </div>
                   </div>

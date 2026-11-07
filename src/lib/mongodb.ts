@@ -426,3 +426,30 @@ export async function syncS3FilesWithMongo(s3Files: S3FileItem[]): Promise<void>
   }
 }
 
+/**
+ * Fetches map of S3 key -> { uploadedBy, uploadedAt } from MongoDB.
+ */
+export async function getFileMetadataMap(): Promise<Map<string, { uploadedBy?: string; uploadedAt?: Date }>> {
+  try {
+    const db = await getDb();
+    const filesCollection = db.collection("files");
+    const docs = await filesCollection
+      .find({}, { projection: { key: 1, uploadedBy: 1, uploadedAt: 1 } })
+      .toArray();
+
+    const map = new Map<string, { uploadedBy?: string; uploadedAt?: Date }>();
+    for (const doc of docs) {
+      if (doc.key) {
+        map.set(doc.key, {
+          uploadedBy: doc.uploadedBy,
+          uploadedAt: doc.uploadedAt,
+        });
+      }
+    }
+    return map;
+  } catch (error) {
+    console.warn("Could not fetch file metadata map from MongoDB:", error);
+    return new Map();
+  }
+}
+

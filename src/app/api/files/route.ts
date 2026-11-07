@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listS3Files, deleteS3File, getS3ConfigStatus } from "@/lib/s3";
-import { removeFileRecord } from "@/lib/mongodb";
+import { removeFileRecord, getFileMetadataMap, syncS3FilesWithMongo } from "@/lib/mongodb";
 import { FileCategory, S3FileItem } from "@/types/file";
 
 export async function GET(request: NextRequest) {
@@ -24,6 +24,21 @@ export async function GET(request: NextRequest) {
     const sortOrder = searchParams.get("sortOrder") || "desc"; // 'asc' | 'desc'
 
     let files = await listS3Files();
+
+    // Attach uploader info from MongoDB
+    try {
+      await syncS3FilesWithMongo(files);
+      const metaMap = await getFileMetadataMap();
+      files = files.map((f) => {
+        const meta = metaMap.get(f.key);
+        return {
+          ...f,
+          uploadedBy: meta?.uploadedBy || f.uploadedBy || "Community",
+        };
+      });
+    } catch {
+      // ignore
+    }
 
     // Search filter
     if (search) {

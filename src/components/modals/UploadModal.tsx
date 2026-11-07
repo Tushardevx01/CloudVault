@@ -188,7 +188,7 @@ export function UploadModal({
         onAddToast({
           type: "error",
           title: "Upload Error",
-          message: result.error || "Could not complete upload to S3.",
+          message: result.error || "Could not complete upload to cloud storage.",
         });
       }
     } catch (err: unknown) {

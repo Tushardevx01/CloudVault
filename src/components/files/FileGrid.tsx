@@ -130,15 +130,25 @@ export function FileGrid({
               </div>
             </div>
 
-            {/* Bottom: Name & Meta */}
-            <div className="mt-2 pt-3 border-t border-slate-100">
-              <p
-                className="text-xs font-semibold text-slate-900 truncate group-hover:text-sky-600 transition-colors"
-                title={file.originalName}
-              >
-                {file.originalName}
-              </p>
-              <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+            {/* Bottom: Name, Uploader & Meta */}
+            <div className="mt-2 pt-3 border-t border-slate-100 space-y-2">
+              <div>
+                <p
+                  className="text-xs font-semibold text-slate-900 truncate group-hover:text-sky-600 transition-colors"
+                  title={file.originalName}
+                >
+                  {file.originalName}
+                </p>
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <div className="w-4 h-4 rounded-full bg-sky-100 text-sky-700 text-[9px] font-bold flex items-center justify-center shrink-0">
+                    {(file.uploadedBy || "User").charAt(0).toUpperCase()}
+                  </div>
+                  <span className="truncate font-medium text-slate-600">
+                    by <span className="font-semibold text-slate-800">@{file.uploadedBy || "User"}</span>
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1.5 border-t border-slate-50">
                 <span className="flex items-center gap-1 font-mono">
                   <HardDrive className="w-3 h-3 text-slate-400" />
                   {formatBytes(file.size)}

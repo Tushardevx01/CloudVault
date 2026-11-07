@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Eye, Download, Trash2, Copy, Check, FileQuestion } from "lucide-react";
+import { Eye, Download, Trash2, FileQuestion } from "lucide-react";
 import { S3FileItem } from "@/types/file";
 import { FileIcon } from "./FileIcon";
 import { formatBytes, formatDate, formatRelativeTime } from "@/lib/utils";
@@ -23,15 +23,6 @@ export function FileList({
   onDelete,
   onOpenUpload,
 }: FileListProps) {
-  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
-
-  const handleCopyKey = (key: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(key);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
-  };
-
   if (isLoading) {
     return (
       <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
@@ -41,9 +32,9 @@ export function FileList({
               <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
                 <th className="py-3.5 px-4 sm:px-6">Name</th>
                 <th className="py-3.5 px-4">Size</th>
-                <th className="py-3.5 px-4 hidden md:table-cell">Type</th>
-                <th className="py-3.5 px-4 hidden lg:table-cell">Uploaded</th>
-                <th className="py-3.5 px-4 hidden xl:table-cell">Storage Key</th>
+                <th className="py-3.5 px-4 hidden sm:table-cell">Uploaded By</th>
+                <th className="py-3.5 px-4 hidden md:table-cell">Category</th>
+                <th className="py-3.5 px-4 hidden lg:table-cell">Date</th>
                 <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
               </tr>
             </thead>
@@ -59,14 +50,14 @@ export function FileList({
                   <td className="py-3.5 px-4">
                     <div className="h-3.5 bg-slate-200 rounded w-16" />
                   </td>
+                  <td className="py-3.5 px-4 hidden sm:table-cell">
+                    <div className="h-5 bg-slate-200 rounded-full w-24" />
+                  </td>
                   <td className="py-3.5 px-4 hidden md:table-cell">
                     <div className="h-4 bg-slate-200 rounded w-14" />
                   </td>
                   <td className="py-3.5 px-4 hidden lg:table-cell">
                     <div className="h-3.5 bg-slate-200 rounded w-20" />
-                  </td>
-                  <td className="py-3.5 px-4 hidden xl:table-cell">
-                    <div className="h-3.5 bg-slate-200 rounded w-36" />
                   </td>
                   <td className="py-3.5 px-4 sm:px-6 text-right">
                     <div className="h-7 bg-slate-200 rounded w-20 ml-auto" />
@@ -108,9 +99,9 @@ export function FileList({
             <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
               <th className="py-3.5 px-4 sm:px-6">Name</th>
               <th className="py-3.5 px-4">Size</th>
+              <th className="py-3.5 px-4 hidden sm:table-cell">Uploaded By</th>
               <th className="py-3.5 px-4 hidden md:table-cell">Category</th>
-              <th className="py-3.5 px-4 hidden lg:table-cell">Uploaded</th>
-              <th className="py-3.5 px-4 hidden xl:table-cell">Storage Key</th>
+              <th className="py-3.5 px-4 hidden lg:table-cell">Date</th>
               <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
             </tr>
           </thead>
@@ -141,8 +132,8 @@ export function FileList({
                         <p className="font-semibold text-slate-900 truncate group-hover:text-sky-600 transition-colors">
                           {file.originalName}
                         </p>
-                        <p className="text-[11px] text-slate-500 lg:hidden">
-                          {formatRelativeTime(file.lastModified)}
+                        <p className="text-[11px] text-slate-500 sm:hidden">
+                          by <span className="font-semibold text-slate-700">@{file.uploadedBy || "User"}</span> • {formatRelativeTime(file.lastModified)}
                         </p>
                       </div>
                     </div>
@@ -151,6 +142,18 @@ export function FileList({
                   {/* Size */}
                   <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
                     {formatBytes(file.size)}
+                  </td>
+
+                  {/* Uploaded By */}
+                  <td className="py-3 px-4 hidden sm:table-cell whitespace-nowrap">
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                      <div className="w-4 h-4 rounded-full bg-sky-600 text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                        {(file.uploadedBy || "User").charAt(0).toUpperCase()}
+                      </div>
+                      <span className="font-semibold text-slate-800 text-xs">
+                        @{file.uploadedBy || "User"}
+                      </span>
+                    </div>
                   </td>
 
                   {/* Category / MIME */}
@@ -165,27 +168,6 @@ export function FileList({
                     <span title={formatDate(file.lastModified)}>
                       {formatRelativeTime(file.lastModified)}
                     </span>
-                  </td>
-
-                  {/* S3 Object Key */}
-                  <td className="py-3 px-4 hidden xl:table-cell max-w-xs text-[11px] font-mono text-slate-500">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate max-w-[200px]" title={file.key}>
-                        {file.key}
-                      </span>
-                      <button
-                        onClick={(e) => handleCopyKey(file.key, e)}
-                        className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0 transition-colors"
-                        title="Copy S3 Key"
-                        aria-label="Copy S3 key"
-                      >
-                        {copiedKey === file.key ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
                   </td>
 
                   {/* Action Buttons */}

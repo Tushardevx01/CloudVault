@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Files, HardDrive, ShieldCheck, ArrowUpRight } from "lucide-react";
+import { Files, HardDrive, ArrowUpRight } from "lucide-react";
 import { StorageStats } from "@/types/file";
 
 interface StatsCardsProps {
@@ -34,18 +34,10 @@ export function StatsCards({
       color: "text-indigo-600 bg-indigo-50 border-indigo-100",
       action: { label: "Upload new file", onClick: onOpenUpload },
     },
-    {
-      title: "Security Status",
-      value: "Encrypted",
-      subtext: "Private object container with expiring access tokens",
-      icon: ShieldCheck,
-      color: "text-emerald-600 bg-emerald-50 border-emerald-100",
-      badge: "Protected",
-    },
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
       {cards.map((card, idx) => {
         const Icon = card.icon;
         return (
@@ -70,14 +62,9 @@ export function StatsCards({
               <div className="text-2xl font-bold text-slate-900 tracking-tight font-mono truncate">
                 {card.value}
               </div>
-              <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 truncate">
-                {card.badge && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
-                    {card.badge}
-                  </span>
-                )}
-                <span className="truncate">{card.subtext}</span>
-              </div>
+              <p className="text-xs text-slate-500 mt-1 truncate">
+                {card.subtext}
+              </p>
             </div>
 
             {/* Bottom Row: Action */}
