@@ -9,7 +9,6 @@ import {
   Archive,
   Code,
   HelpCircle,
-  CloudLightning,
 } from "lucide-react";
 import { StorageStats, FileCategory } from "@/types/file";
 
@@ -25,38 +24,38 @@ export function StorageBreakdown({ stats, onFilterCategory }: StorageBreakdownPr
   > = {
     image: {
       label: "Images",
-      color: "text-emerald-400",
+      color: "text-emerald-600",
       bgBar: "bg-emerald-500",
       icon: Image,
     },
     document: {
       label: "Documents",
-      color: "text-sky-400",
+      color: "text-sky-600",
       bgBar: "bg-sky-500",
       icon: FileText,
     },
     media: {
       label: "Media",
-      color: "text-purple-400",
+      color: "text-purple-600",
       bgBar: "bg-purple-500",
       icon: Film,
     },
     archive: {
       label: "Archives",
-      color: "text-orange-400",
-      bgBar: "bg-orange-500",
+      color: "text-amber-600",
+      bgBar: "bg-amber-500",
       icon: Archive,
     },
     code: {
       label: "Code",
-      color: "text-indigo-400",
+      color: "text-indigo-600",
       bgBar: "bg-indigo-500",
       icon: Code,
     },
     other: {
       label: "Others",
-      color: "text-slate-400",
-      bgBar: "bg-slate-500",
+      color: "text-slate-500",
+      bgBar: "bg-slate-400",
       icon: HelpCircle,
     },
   };
@@ -79,42 +78,33 @@ export function StorageBreakdown({ stats, onFilterCategory }: StorageBreakdownPr
   const totalFiles = stats?.totalFiles ?? 0;
 
   return (
-    <div className="p-5 sm:p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5 w-full">
-      {/* Top Header: Title & Architecture Overview */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
+    <div className="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 space-y-5 w-full shadow-xs">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 shrink-0">
             <PieChart className="w-4 h-4" />
           </div>
           <div>
-            <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">
-              Storage Overview & Distribution
+            <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
+              Storage Allocation
             </h2>
-            <p className="text-xs text-slate-400">
-              Categorized usage across Amazon S3 bucket objects
+            <p className="text-xs text-slate-500">
+              Categorized breakdown of your stored assets
             </p>
           </div>
         </div>
 
-        {/* Architecture Pill */}
-        <div className="flex items-center gap-2 text-xs bg-slate-800/80 border border-slate-700/60 px-3 py-1.5 rounded-xl self-start sm:self-auto">
-          <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span className="text-slate-400">Architecture:</span>
-          <span className="font-mono text-slate-200 font-medium">Browser → Next.js → S3</span>
+        <div className="text-xs font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+          Total: <strong className="text-slate-900">{stats?.totalSizeFormatted || "0 B"}</strong>
         </div>
       </div>
 
       {/* Multi-segment Proportion Bar */}
       <div>
-        <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-          <span>Allocation by File Size</span>
-          <span className="font-mono text-slate-300 font-semibold">
-            {stats?.totalSizeFormatted || "0 B"} total
-          </span>
-        </div>
-        <div className="w-full h-2.5 rounded-full bg-slate-800 overflow-hidden flex">
+        <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden flex">
           {totalFiles === 0 ? (
-            <div className="w-full h-full bg-slate-800" />
+            <div className="w-full h-full bg-slate-100" />
           ) : (
             categories.map((cat) => {
               if (cat.percentage <= 0) return null;
@@ -139,24 +129,24 @@ export function StorageBreakdown({ stats, onFilterCategory }: StorageBreakdownPr
             <button
               key={cat.key}
               onClick={() => onFilterCategory?.(cat.key)}
-              className="p-3 rounded-xl bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 hover:border-slate-600 transition-colors text-left flex flex-col justify-between cursor-pointer group"
+              className="p-3 rounded-xl bg-slate-50/70 hover:bg-slate-100/90 border border-slate-200/80 hover:border-slate-300 transition-all text-left flex flex-col justify-between cursor-pointer group"
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5">
                   <Icon className={`w-3.5 h-3.5 ${cat.color} shrink-0`} />
-                  <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                  <span className="text-xs font-semibold text-slate-700 group-hover:text-slate-900">
                     {cat.label}
                   </span>
                 </div>
-                <span className="text-[10px] font-mono font-semibold text-slate-400">
+                <span className="text-[10px] font-mono font-bold text-slate-400">
                   {cat.percentage}%
                 </span>
               </div>
               <div>
-                <p className="text-sm font-bold text-white font-mono">
+                <p className="text-sm font-bold text-slate-900 font-mono">
                   {cat.sizeFormatted}
                 </p>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-500">
                   {cat.count} file{cat.count === 1 ? "" : "s"}
                 </p>
               </div>

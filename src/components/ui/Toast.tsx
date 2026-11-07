@@ -40,34 +40,34 @@ function ToastItem({
   }, [toast.id, onDismiss]);
 
   const icons = {
-    success: <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />,
-    error: <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />,
-    info: <Info className="w-5 h-5 text-sky-400 shrink-0" />,
+    success: <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />,
+    error: <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />,
+    info: <Info className="w-5 h-5 text-sky-600 shrink-0" />,
   };
 
-  const borders = {
-    success: "border-emerald-500/30 bg-emerald-950/90 text-emerald-100",
-    error: "border-rose-500/30 bg-rose-950/90 text-rose-100",
-    info: "border-sky-500/30 bg-sky-950/90 text-sky-100",
+  const styles = {
+    success: "border-emerald-200 bg-white text-slate-900 shadow-lg shadow-emerald-500/5",
+    error: "border-rose-200 bg-white text-slate-900 shadow-lg shadow-rose-500/5",
+    info: "border-sky-200 bg-white text-slate-900 shadow-lg shadow-sky-500/5",
   };
 
   return (
     <div
       role="alert"
-      className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-xl backdrop-blur-md transition-all duration-200 ${borders[toast.type]}`}
+      className={`pointer-events-auto flex items-start gap-3 p-4 rounded-2xl border transition-all duration-200 ${styles[toast.type]}`}
     >
       {icons[toast.type]}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold leading-tight">{toast.title}</p>
+        <p className="text-xs font-bold text-slate-900 leading-tight">{toast.title}</p>
         {toast.message && (
-          <p className="text-xs mt-1 text-slate-300 opacity-90 break-words">
+          <p className="text-xs mt-1 text-slate-600 break-words leading-relaxed">
             {toast.message}
           </p>
         )}
       </div>
       <button
         onClick={() => onDismiss(toast.id)}
-        className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+        className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
         aria-label="Close notification"
       >
         <X className="w-4 h-4" />
