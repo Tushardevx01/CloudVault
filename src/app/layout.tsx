@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CloudVault - Cloud File Storage & Management (Amazon S3)",
+  title: "CloudVault - Modern Cloud Storage & Personal Workspace",
   description:
-    "Enterprise-grade cloud storage and file management system powered by Amazon S3 and Next.js. Academic Cloud Computing demonstration project.",
+    "Fast, private, and frictionless personal cloud file workspace. Store, preview, and organize your files with instant inline preview and bank-grade encryption.",
 };
 
 export default function RootLayout({
@@ -13,8 +13,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark h-full antialiased">
-      <body className="min-h-full flex flex-col bg-[#0b0f17] text-slate-100">
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <body
+        className="min-h-full flex flex-col bg-slate-50 text-slate-900"
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>

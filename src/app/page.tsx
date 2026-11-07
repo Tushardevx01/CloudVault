@@ -75,7 +75,10 @@ export default function HomePage() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col selection:bg-sky-500 selection:text-white">
+    <div
+      className="min-h-screen bg-slate-50 text-slate-900 flex flex-col selection:bg-sky-500 selection:text-white"
+      suppressHydrationWarning
+    >
       {/* 1. TOP NAVIGATION */}
       <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -108,7 +111,7 @@ export default function HomePage() {
             </a>
           </nav>
 
-          {/* Action CTA: Only ONE Get Started button */}
+          {/* Action: Sign In for guests, Go to Dashboard for authenticated users */}
           <div className="flex items-center gap-3">
             {currentUser ? (
               <Link
@@ -120,11 +123,10 @@ export default function HomePage() {
               </Link>
             ) : (
               <button
-                onClick={() => openAuth("signup")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
+                onClick={() => openAuth("signin")}
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
               >
-                <span>Get Started</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                Sign In
               </button>
             )}
           </div>
@@ -158,21 +160,14 @@ export default function HomePage() {
               Upload in seconds, stream inline, and keep your data safe.
             </p>
 
-            {/* Primary Action Buttons */}
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3.5">
+            {/* Primary Action Button: Only ONE Get Started button */}
+            <div className="mt-8 flex items-center justify-center">
               <button
                 onClick={() => openAuth("signup")}
-                className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm font-semibold shadow-sm transition-all cursor-pointer hover:-translate-y-0.5"
+                className="flex items-center gap-2 px-7 py-3.5 rounded-2xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm font-semibold shadow-sm transition-all cursor-pointer hover:-translate-y-0.5"
               >
-                <span>Get Started Free</span>
+                <span>Get Started</span>
                 <ArrowRight className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={() => openAuth("signin")}
-                className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold border border-slate-200 transition-all cursor-pointer"
-              >
-                <span>Sign In to Vault</span>
               </button>
             </div>
 
@@ -588,7 +583,7 @@ export default function HomePage() {
                 onClick={() => openAuth("signup")}
                 className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold shadow-sm transition-all cursor-pointer hover:-translate-y-0.5"
               >
-                <span>Get Started Free</span>
+                <span>Create Free Account</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -630,7 +625,7 @@ export default function HomePage() {
           </div>
 
           <div className="pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400">
-            <p>© {new Date().getFullYear()} CloudVault. Modern Cloud Object Storage Platform.</p>
+            <p>© 2026 CloudVault. Modern Cloud Object Storage Platform.</p>
             <p>Designed for speed, reliability & effortless usability.</p>
           </div>
         </div>
