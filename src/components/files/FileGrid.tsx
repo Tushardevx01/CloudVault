@@ -13,6 +13,8 @@ interface FileGridProps {
   onDownload: (file: S3FileItem) => void;
   onDelete: (file: S3FileItem) => void;
   onOpenUpload?: () => void;
+  currentUsername?: string;
+  isAdmin?: boolean;
 }
 
 export function FileGrid({
@@ -22,6 +24,8 @@ export function FileGrid({
   onDownload,
   onDelete,
   onOpenUpload,
+  currentUsername,
+  isAdmin = false,
 }: FileGridProps) {
   if (isLoading) {
     return (
@@ -78,6 +82,13 @@ export function FileGrid({
           file.originalName.toLowerCase().endsWith(".pdf") ||
           file.category === "code";
 
+        const isOwner = Boolean(
+          currentUsername &&
+          file.uploadedBy &&
+          file.uploadedBy.toLowerCase().trim() === currentUsername.toLowerCase().trim()
+        );
+        const canDelete = isAdmin || isOwner;
+
         return (
           <div
             key={file.key}
@@ -109,13 +120,15 @@ export function FileGrid({
                 >
                   <Download className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  onClick={() => onDelete(file)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-rose-600"
-                  title="Delete"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {canDelete && (
+                  <button
+                    onClick={() => onDelete(file)}
+                    className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-rose-600"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 

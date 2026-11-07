@@ -9,7 +9,6 @@ import {
   Loader2,
   Trash2,
   Cloud,
-  User,
 } from "lucide-react";
 import { formatBytes, getFileCategory } from "@/lib/utils";
 import { FileIcon } from "../files/FileIcon";
@@ -143,7 +142,7 @@ export function UploadModal({
     setIsUploading(true);
 
     const formData = new FormData();
-    formData.append("userName", uploaderName.trim() || "User");
+    formData.append("userName", (currentUsername || uploaderName).trim() || "User");
     pendingFiles.forEach((item) => {
       formData.append("files", item.file);
     });
@@ -242,32 +241,6 @@ export function UploadModal({
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-4 flex-1">
-          {/* Uploader Name Field */}
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2">
-              <User className="w-4 h-4 text-sky-600" />
-              <label htmlFor="uploaderName" className="text-xs font-semibold text-slate-700">
-                Uploading As:
-              </label>
-            </div>
-            <div className="flex items-center gap-1.5 flex-1 max-w-xs">
-              <input
-                id="uploaderName"
-                type="text"
-                value={uploaderName}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setUploaderName(val);
-                  if (typeof window !== "undefined") {
-                    localStorage.setItem("cloudvault_uploader_name", val);
-                  }
-                }}
-                placeholder="User Name"
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-100 transition-colors"
-              />
-            </div>
-          </div>
-
           {/* Dropzone */}
           <div
             onDragEnter={handleDrag}

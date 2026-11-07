@@ -356,6 +356,7 @@ export default function UserDashboard() {
                     onDownload={handleDownload}
                     onDelete={(f) => setDeleteTargetFile(f)}
                     onOpenUpload={() => setIsUploadOpen(true)}
+                    currentUsername={currentUser?.username || currentUser?.name}
                   />
                 ) : (
                   <FileGrid
@@ -365,6 +366,7 @@ export default function UserDashboard() {
                     onDownload={handleDownload}
                     onDelete={(f) => setDeleteTargetFile(f)}
                     onOpenUpload={() => setIsUploadOpen(true)}
+                    currentUsername={currentUser?.username || currentUser?.name}
                   />
                 )}
               </div>
@@ -495,6 +497,7 @@ export default function UserDashboard() {
                   onDownload={handleDownload}
                   onDelete={(f) => setDeleteTargetFile(f)}
                   onOpenUpload={() => setIsUploadOpen(true)}
+                  currentUsername={currentUser?.username || currentUser?.name}
                 />
               ) : (
                 <FileGrid
@@ -504,6 +507,7 @@ export default function UserDashboard() {
                   onDownload={handleDownload}
                   onDelete={(f) => setDeleteTargetFile(f)}
                   onOpenUpload={() => setIsUploadOpen(true)}
+                  currentUsername={currentUser?.username || currentUser?.name}
                 />
               )}
             </div>

@@ -13,6 +13,8 @@ interface FileListProps {
   onDownload: (file: S3FileItem) => void;
   onDelete: (file: S3FileItem) => void;
   onOpenUpload: () => void;
+  currentUsername?: string;
+  isAdmin?: boolean;
 }
 
 export function FileList({
@@ -22,6 +24,8 @@ export function FileList({
   onDownload,
   onDelete,
   onOpenUpload,
+  currentUsername,
+  isAdmin = false,
 }: FileListProps) {
   if (isLoading) {
     return (
@@ -112,6 +116,13 @@ export function FileList({
                 file.originalName.toLowerCase().endsWith(".pdf") ||
                 file.category === "code";
 
+              const isOwner = Boolean(
+                currentUsername &&
+                file.uploadedBy &&
+                file.uploadedBy.toLowerCase().trim() === currentUsername.toLowerCase().trim()
+              );
+              const canDelete = isAdmin || isOwner;
+
               return (
                 <tr
                   key={file.key}
@@ -195,21 +206,23 @@ export function FileList({
                       <button
                         onClick={() => onDownload(file)}
                         className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-sky-50 hover:border-sky-200 text-slate-600 hover:text-sky-600 transition-colors cursor-pointer shadow-xs"
-                        title="Download from Amazon S3"
+                        title="Download file"
                         aria-label="Download file"
                       >
                         <Download className="w-3.5 h-3.5" />
                       </button>
 
-                      {/* Delete Button */}
-                      <button
-                        onClick={() => onDelete(file)}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-600 transition-colors cursor-pointer shadow-xs"
-                        title="Delete from Amazon S3"
-                        aria-label="Delete file"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {/* Delete Button (Only file owner or admin can delete) */}
+                      {canDelete && (
+                        <button
+                          onClick={() => onDelete(file)}
+                          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-rose-50 hover:border-rose-200 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer shadow-xs"
+                          title="Delete file"
+                          aria-label="Delete file"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -6,8 +6,6 @@ import {
   RefreshCw,
   Search,
   Upload,
-  User,
-  LogOut,
 } from "lucide-react";
 import { ActiveTab } from "./Sidebar";
 
@@ -32,8 +30,6 @@ export function Navbar({
   isRefreshing,
   searchTerm,
   onSearchChange,
-  currentUser,
-  onLogout,
 }: NavbarProps) {
   const titles: Record<ActiveTab, { title: string; subtitle: string }> = {
     dashboard: {
@@ -97,24 +93,6 @@ export function Navbar({
               className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-sky-600" : ""}`}
             />
           </button>
-
-          {/* User Profile or Admin Link */}
-          {currentUser && (
-            <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 pl-2.5 pr-1.5 py-1 rounded-xl text-xs">
-              <User className="w-3.5 h-3.5 text-sky-600" />
-              <span className="font-semibold text-slate-800">{currentUser.name}</span>
-              {onLogout && (
-                <button
-                  onClick={onLogout}
-                  className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer ml-1"
-                  title="Sign Out"
-                  aria-label="Sign Out"
-                >
-                  <LogOut className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          )}
 
           {/* Upload Button */}
           <button
