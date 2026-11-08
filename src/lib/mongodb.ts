@@ -3,10 +3,7 @@ import bcrypt from "bcryptjs";
 import { CloudUser, S3FileItem } from "@/types/file";
 import { formatBytes } from "./utils";
 
-const uri =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://tkddey2033929837_db_user:fskjlrjVKktZCMVx@cluster0.w4a6jzg.mongodb.net/cloudvault?retryWrites=true&w=majority";
-
+const uri = process.env.MONGODB_URI;
 const DB_NAME = "cloudvault";
 const DEFAULT_ADMIN_USERNAME = "admin";
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "Adamas@2023";
