@@ -5,6 +5,8 @@ export * from "./layout/Navbar";
 // Dashboard Components
 export * from "./dashboard/StatsCards";
 export * from "./dashboard/StorageBreakdown";
+export * from "./dashboard/CloudVsLocalSection";
+export * from "./dashboard/SystemHealthSection";
 
 // File Management Components
 export * from "./files/FileIcon";

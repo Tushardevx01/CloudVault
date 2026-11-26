@@ -10,10 +10,13 @@ import {
   HardDrive,
   X,
   LogOut,
+  Layers,
+  ShieldCheck,
+  Settings,
 } from "lucide-react";
 import { StorageStats } from "@/types/file";
 
-export type ActiveTab = "dashboard" | "files";
+export type ActiveTab = "dashboard" | "files" | "cloud-concepts" | "system";
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -39,76 +42,68 @@ export function Sidebar({
   const navItems = [
     {
       id: "dashboard" as ActiveTab,
-      label: "Dashboard",
+      label: "Overview",
       icon: LayoutDashboard,
-      badge: stats ? `${stats.totalFiles}` : undefined,
     },
     {
       id: "files" as ActiveTab,
-      label: "File Manager",
+      label: "Files & Storage",
       icon: FolderOpen,
+      badge: stats ? `${stats.totalFiles}` : undefined,
+    },
+    {
+      id: "cloud-concepts" as ActiveTab,
+      label: "Architecture",
+      icon: Layers,
+    },
+    {
+      id: "system" as ActiveTab,
+      label: "System Health",
+      icon: ShieldCheck,
     },
   ];
 
-  return (
-    <>
-      {/* Mobile Drawer Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-40 lg:hidden"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
-
-      {/* Structured Fixed Sidebar */}
-      <aside
-        suppressHydrationWarning
-        className={`fixed top-0 bottom-0 left-0 z-40 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-200 ease-in-out lg:translate-x-0 ${
-          isOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        {/* Brand Header */}
-        <div className="h-16 px-5 flex items-center justify-between border-b border-slate-100 shrink-0">
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center text-white shrink-0 shadow-xs">
-              <Cloud className="w-5 h-5" />
+  const sidebarContent = (
+    <div className="h-full flex flex-col justify-between p-5">
+      {/* Top Branding Section */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-3 group">
+            <div className="w-10 h-10 rounded-2xl bg-white border border-[#E3EAF0] shadow-[0_4px_16px_rgba(150,175,205,0.18)] flex items-center justify-center text-[#29343D] group-hover:scale-105 transition-transform">
+              <Cloud className="w-5 h-5 text-[#8CBCE8]" />
             </div>
             <div>
-              <span className="font-bold text-base text-slate-900 tracking-tight">
+              <span className="font-extrabold text-lg text-[#29343D] tracking-tight">
                 CloudVault
               </span>
-              <p className="text-[11px] text-slate-500">Cloud Storage</p>
+              <p className="text-[10px] uppercase font-bold tracking-wider text-[#7A8792]">
+                SaaS Storage
+              </p>
             </div>
           </Link>
           <button
             onClick={onClose}
-            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            className="lg:hidden p-1.5 rounded-xl text-[#7A8792] hover:text-[#29343D] hover:bg-white/60 transition-colors cursor-pointer"
             aria-label="Close navigation"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Primary Action Button */}
-        <div className="p-4 shrink-0">
-          <button
-            onClick={() => {
-              onOpenUpload();
-              if (isOpen) onClose();
-            }}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Files</span>
-          </button>
-        </div>
+        {/* Primary Action */}
+        <button
+          onClick={() => {
+            onOpenUpload();
+            if (isOpen) onClose();
+          }}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#8CBCE8] to-[#A399F0] hover:opacity-95 active:scale-[0.99] text-white text-xs font-semibold shadow-[0_4px_14px_rgba(140,188,232,0.35)] transition-all cursor-pointer"
+        >
+          <Upload className="w-4 h-4" />
+          <span>Upload Files</span>
+        </button>
 
-        {/* Navigation Items */}
-        <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
-          <div className="px-3 pb-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-            Workspace
-          </div>
+        {/* Navigation Items Matching Reference Image */}
+        <nav className="space-y-1.5 pt-2">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -119,22 +114,22 @@ export function Sidebar({
                   onSelectTab(item.id);
                   if (isOpen) onClose();
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs font-medium transition-all cursor-pointer ${
                   isActive
-                    ? "bg-sky-50 text-sky-700 border border-sky-200/80 shadow-xs"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                    ? "bg-white border border-[#E3EAF0] shadow-[0_4px_16px_rgba(150,175,205,0.12)] text-[#29343D] font-bold"
+                    : "text-[#7A8792] hover:text-[#29343D] hover:bg-white/60"
                 }`}
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-3">
                   <Icon
-                    className={`w-4 h-4 ${
-                      isActive ? "text-sky-600" : "text-slate-400"
+                    className={`w-4 h-4 transition-colors ${
+                      isActive ? "text-[#29343D]" : "text-[#7A8792]"
                     }`}
                   />
                   <span>{item.label}</span>
                 </div>
                 {item.badge && (
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#E6E1FA] text-[#29343D] border border-white font-semibold">
                     {item.badge}
                   </span>
                 )}
@@ -142,59 +137,102 @@ export function Sidebar({
             );
           })}
         </nav>
+      </div>
 
-        {/* Clean Storage Usage Widget (No raw S3 bucket jargon) */}
-        <div className="p-4 border-t border-slate-100 shrink-0">
-          <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
-            <span className="flex items-center gap-1.5 font-medium text-slate-700">
-              <HardDrive className="w-3.5 h-3.5 text-sky-600" />
+      {/* Bottom Controls Matching Reference Image (Settings, Logout, Storage & User) */}
+      <div className="space-y-4 pt-6 border-t border-[#E3EAF0]/60">
+        {/* Storage Mini Bar */}
+        <div className="p-3.5 rounded-2xl bg-white/70 border border-[#E3EAF0] shadow-2xs space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[#7A8792]">
+              <HardDrive className="w-3.5 h-3.5 text-[#8CBCE8]" />
               Storage Used
             </span>
-            <span className="font-mono text-xs font-semibold text-slate-900">
+            <span className="font-mono text-xs font-bold text-[#29343D]">
               {stats?.totalSizeFormatted || "0 B"}
             </span>
           </div>
-          <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+          <div className="w-full h-1.5 rounded-full bg-[#E3EAF0] overflow-hidden">
             <div
-              className="h-full bg-sky-500 rounded-full transition-all duration-300"
+              className="h-full bg-gradient-to-r from-[#8CBCE8] via-[#83CBA0] to-[#A399F0] rounded-full transition-all duration-300"
               style={{
-                width: stats && stats.totalSizeBytes > 0 ? "24%" : "0%",
+                width: stats && stats.totalSizeBytes > 0 ? "28%" : "0%",
               }}
             />
           </div>
-          <p className="text-[10px] text-slate-400 mt-1.5">
-            {stats?.totalFiles ?? 0} active object{(stats?.totalFiles ?? 0) === 1 ? "" : "s"} stored
+          <p className="text-[10px] text-[#7A8792]">
+            {stats?.totalFiles ?? 0} active objects in AWS S3
           </p>
         </div>
 
-        {/* User Session Footer */}
+        {/* Settings & Logout Links like Reference Image */}
+        <div className="space-y-1">
+          <button
+            onClick={() => {
+              onSelectTab("system");
+              if (isOpen) onClose();
+            }}
+            className="w-full flex items-center gap-3 px-3.5 py-2 rounded-2xl text-xs font-medium text-[#7A8792] hover:text-[#29343D] hover:bg-white/60 transition-all cursor-pointer"
+          >
+            <Settings className="w-4 h-4 text-[#7A8792]" />
+            <span>Settings</span>
+          </button>
+
+          {currentUser && onLogout && (
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center gap-3 px-3.5 py-2 rounded-2xl text-xs font-medium text-[#7A8792] hover:text-rose-600 hover:bg-rose-50/60 transition-all cursor-pointer"
+            >
+              <LogOut className="w-4 h-4 text-[#7A8792]" />
+              <span>Log Out</span>
+            </button>
+          )}
+        </div>
+
+        {/* User Profile Capsule */}
         {currentUser && (
-          <div className="p-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 font-bold text-xs flex items-center justify-center shrink-0">
-                {currentUser.name?.charAt(0).toUpperCase() || "U"}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-900 truncate">
-                  {currentUser.name || currentUser.username}
-                </p>
-                <p className="text-[10px] text-slate-500 truncate">
-                  {currentUser.email}
-                </p>
-              </div>
+          <div className="pt-2 flex items-center gap-2.5 px-2">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#D8EEFF] to-[#E6E1FA] border border-white text-[#29343D] font-bold text-xs flex items-center justify-center shadow-2xs shrink-0">
+              {currentUser.name?.charAt(0).toUpperCase() || currentUser.username?.charAt(0).toUpperCase() || "U"}
             </div>
-            {onLogout && (
-              <button
-                onClick={onLogout}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                title="Sign Out"
-                aria-label="Sign Out"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-[#29343D] truncate">
+                {currentUser.name || currentUser.username}
+              </p>
+              <p className="text-[10px] text-[#7A8792] truncate">
+                {currentUser.email}
+              </p>
+            </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Mobile Drawer Backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-[#29343D]/20 backdrop-blur-xs z-40 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Desktop In-Container Sidebar matching Reference Image */}
+      <aside className="hidden lg:flex flex-col w-64 bg-white/90 backdrop-blur-xl rounded-[28px] border border-white shadow-[0_8px_30px_rgba(150,175,205,0.12)] shrink-0 self-stretch overflow-hidden">
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile Drawer Sidebar */}
+      <aside
+        suppressHydrationWarning
+        className={`fixed top-4 bottom-4 left-4 z-50 w-72 bg-white/95 backdrop-blur-2xl rounded-[28px] border border-white shadow-2xl transition-transform duration-200 ease-in-out lg:hidden overflow-hidden ${
+          isOpen ? "translate-x-0" : "-translate-x-[120%]"
+        }`}
+      >
+        {sidebarContent}
       </aside>
     </>
   );

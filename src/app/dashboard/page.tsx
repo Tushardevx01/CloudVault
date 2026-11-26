@@ -8,6 +8,8 @@ import {
   LayoutGrid,
   List,
   Clock,
+  Sparkles,
+  Upload,
 } from "lucide-react";
 import {
   Sidebar,
@@ -22,6 +24,8 @@ import {
   ToastContainer,
   ToastMessage,
   ActiveTab,
+  CloudVsLocalSection,
+  SystemHealthSection,
 } from "@/components";
 import { FILE_CATEGORIES } from "@/lib/constants";
 import { S3FileItem, StorageStats, FileCategory } from "@/types/file";
@@ -150,7 +154,7 @@ export default function UserDashboard() {
     addToast({
       type: "info",
       title: "Data Synced",
-      message: "Refreshed cloud storage files.",
+      message: "Refreshed cloud storage files and storage metrics.",
     });
   };
 
@@ -221,7 +225,7 @@ export default function UserDashboard() {
         addToast({
           type: "success",
           title: "File Deleted",
-          message: `"${file.originalName}" permanently removed.`,
+          message: `"${file.originalName}" permanently removed from your vault.`,
         });
         await fetchData();
       } else {
@@ -242,115 +246,262 @@ export default function UserDashboard() {
 
   return (
     <div
-      className="min-h-screen bg-slate-50 text-slate-900 flex"
+      className="min-h-screen bg-reference-canvas bg-grid-mesh p-3 sm:p-5 lg:p-7 flex items-center justify-center font-sans antialiased"
       suppressHydrationWarning
     >
       {/* Toast System */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        onOpenUpload={() => setIsUploadOpen(true)}
-        stats={stats}
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        currentUser={currentUser}
-        onLogout={handleLogout}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Navbar */}
-        <Navbar
+      {/* Floating Main Glass Container matching Reference Image */}
+      <div className="w-full max-w-[1600px] bg-white/70 backdrop-blur-2xl rounded-[36px] border border-white/80 shadow-[0_20px_60px_-15px_rgba(32,50,90,0.07)] p-4 sm:p-6 lg:p-7 flex flex-col lg:flex-row gap-6 min-h-[92vh]">
+        {/* Sidebar Navigation */}
+        <Sidebar
           activeTab={activeTab}
-          onToggleSidebar={() => setSidebarOpen(true)}
+          onSelectTab={setActiveTab}
           onOpenUpload={() => setIsUploadOpen(true)}
-          onRefresh={handleRefresh}
-          isRefreshing={isRefreshing}
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-          region={stats?.region || "ap-south-1"}
+          stats={stats}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
           currentUser={currentUser}
           onLogout={handleLogout}
         />
 
-        {/* Content View Container */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full space-y-6 max-w-7xl mx-auto">
-          {/* TAB: DASHBOARD */}
-          {activeTab === "dashboard" && (
-            <div className="space-y-6">
-              {/* Stat Cards - Clean, Focused, No Bloat */}
-              <StatsCards
-                stats={stats}
-                isLoading={isLoading}
-                onViewFiles={() => setActiveTab("files")}
-                onOpenUpload={() => setIsUploadOpen(true)}
-              />
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Navbar */}
+          <Navbar
+            activeTab={activeTab}
+            onToggleSidebar={() => setSidebarOpen(true)}
+            onOpenUpload={() => setIsUploadOpen(true)}
+            onRefresh={handleRefresh}
+            isRefreshing={isRefreshing}
+            searchTerm={searchTerm}
+            onSearchChange={setSearchTerm}
+            region={stats?.region || "ap-south-1"}
+            currentUser={currentUser}
+            onLogout={handleLogout}
+          />
 
-              {/* Storage Category Distribution */}
-              <StorageBreakdown
-                stats={stats}
-                onFilterCategory={(cat) => {
-                  setCategoryFilter(cat);
-                  setActiveTab("files");
-                }}
-              />
+          {/* Content View Container */}
+          <main className="flex-1 w-full space-y-6">
+            {/* TAB 1: DASHBOARD */}
+            {activeTab === "dashboard" && (
+              <div className="space-y-6">
+                {/* Stat Cards matching Reference Image */}
+                <StatsCards
+                  stats={stats}
+                  isLoading={isLoading}
+                  onViewFiles={() => setActiveTab("files")}
+                  onOpenUpload={() => setIsUploadOpen(true)}
+                  onViewArchitecture={() => setActiveTab("cloud-concepts")}
+                  onViewSecurity={() => setActiveTab("system")}
+                />
 
-              {/* Recent Uploads Section */}
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-sky-600" />
-                    <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                      Recent Uploads
-                    </h2>
-                  </div>
+                {/* Storage Breakdown with Pill Bar Chart & Donut Gauge */}
+                <StorageBreakdown
+                  stats={stats}
+                  onFilterCategory={(cat) => {
+                    setCategoryFilter(cat);
+                    setActiveTab("files");
+                  }}
+                />
 
-                  <div className="flex items-center gap-2.5">
-                    {/* View Switch: List / Grid */}
-                    <div className="flex items-center bg-white border border-slate-200 rounded-xl p-0.5 shadow-2xs">
-                      <button
-                        onClick={() => setViewMode("table")}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                          viewMode === "table"
-                            ? "bg-slate-100 text-slate-900 shadow-xs"
-                            : "text-slate-500 hover:text-slate-800"
-                        }`}
-                        title="List View"
-                      >
-                        <List className="w-3.5 h-3.5" />
-                        <span>List</span>
-                      </button>
-                      <button
-                        onClick={() => setViewMode("grid")}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                          viewMode === "grid"
-                            ? "bg-slate-100 text-slate-900 shadow-xs"
-                            : "text-slate-500 hover:text-slate-800"
-                        }`}
-                        title="Grid View"
-                      >
-                        <LayoutGrid className="w-3.5 h-3.5" />
-                        <span>Grid</span>
-                      </button>
+                {/* Recent Uploads Section matching Reference Image Bottom Rows */}
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-white border border-[#E3EAF0] flex items-center justify-center text-[#29343D] shadow-2xs">
+                        <Clock className="w-4 h-4 text-[#8CBCE8]" />
+                      </div>
+                      <h2 className="text-base font-bold text-[#29343D] tracking-tight">
+                        Recent Uploads
+                      </h2>
                     </div>
 
-                    {files.length > 6 && (
-                      <button
-                        onClick={() => setActiveTab("files")}
-                        className="text-xs font-semibold text-sky-600 hover:text-sky-700 transition-colors cursor-pointer"
-                      >
-                        View all {files.length} files →
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2.5">
+                      {/* View Switch: List / Grid */}
+                      <div className="flex items-center bg-white/90 backdrop-blur-md border border-white rounded-full p-1 shadow-[0_2px_12px_rgba(150,175,205,0.08)]">
+                        <button
+                          onClick={() => setViewMode("table")}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            viewMode === "table"
+                              ? "bg-white text-[#29343D] shadow-2xs border border-[#E3EAF0]"
+                              : "text-[#7A8792] hover:text-[#29343D]"
+                          }`}
+                          title="List View"
+                        >
+                          <List className="w-3.5 h-3.5" />
+                          <span>List</span>
+                        </button>
+                        <button
+                          onClick={() => setViewMode("grid")}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            viewMode === "grid"
+                              ? "bg-white text-[#29343D] shadow-2xs border border-[#E3EAF0]"
+                              : "text-[#7A8792] hover:text-[#29343D]"
+                          }`}
+                          title="Grid View"
+                        >
+                          <LayoutGrid className="w-3.5 h-3.5" />
+                          <span>Grid</span>
+                        </button>
+                      </div>
+
+                      {files.length > 6 && (
+                        <button
+                          onClick={() => setActiveTab("files")}
+                          className="text-xs font-semibold text-[#20628E] hover:text-[#8CBCE8] transition-colors cursor-pointer"
+                        >
+                          View all {files.length} files →
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {viewMode === "table" ? (
+                    <FileList
+                      files={files.slice(0, 6)}
+                      isLoading={isLoading}
+                      onPreview={(f) => setPreviewFile(f)}
+                      onDownload={handleDownload}
+                      onDelete={(f) => setDeleteTargetFile(f)}
+                      onOpenUpload={() => setIsUploadOpen(true)}
+                      currentUsername={currentUser?.username || currentUser?.name}
+                    />
+                  ) : (
+                    <FileGrid
+                      files={files.slice(0, 6)}
+                      isLoading={isLoading}
+                      onPreview={(f) => setPreviewFile(f)}
+                      onDownload={handleDownload}
+                      onDelete={(f) => setDeleteTargetFile(f)}
+                      onOpenUpload={() => setIsUploadOpen(true)}
+                      currentUsername={currentUser?.username || currentUser?.name}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: ALL FILES */}
+            {activeTab === "files" && (
+              <div className="space-y-4">
+                {/* Filter & Search Toolbar */}
+                <div className="p-4 rounded-3xl bg-white/90 backdrop-blur-md border border-white shadow-[0_4px_20px_rgba(150,175,205,0.08)] space-y-3">
+                  {/* Search & Actions Row */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7A8792]" />
+                      <input
+                        type="text"
+                        placeholder="Search files by name or object key..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full bg-[#F6F9FC] border border-[#E3EAF0] rounded-full pl-9 pr-4 py-2 text-xs text-[#29343D] placeholder:text-[#7A8792] focus:outline-none focus:bg-white focus:border-[#8CBCE8] focus:ring-2 focus:ring-[#D8EEFF] transition-all"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* Sort Dropdown */}
+                      <div className="flex items-center bg-[#F6F9FC] border border-[#E3EAF0] rounded-full px-3 py-1.5 text-xs text-[#29343D]">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-[#7A8792] mr-1.5" />
+                        <select
+                          value={sortBy}
+                          onChange={(e) =>
+                            setSortBy(e.target.value as "date" | "name" | "size")
+                          }
+                          className="bg-transparent text-[#29343D] focus:outline-none cursor-pointer text-xs"
+                        >
+                          <option value="date">Date</option>
+                          <option value="name">Name</option>
+                          <option value="size">Size</option>
+                        </select>
+                        <button
+                          onClick={() =>
+                            setSortOrder((prev) =>
+                              prev === "asc" ? "desc" : "asc"
+                            )
+                          }
+                          className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#E3EAF0] text-[#29343D] hover:bg-[#D8EEFF] font-semibold cursor-pointer transition-colors"
+                          title="Toggle sort direction"
+                        >
+                          {sortOrder.toUpperCase()}
+                        </button>
+                      </div>
+
+                      {/* View Switch: List / Grid */}
+                      <div className="flex items-center bg-[#F6F9FC] border border-[#E3EAF0] rounded-full p-1 shadow-2xs">
+                        <button
+                          onClick={() => setViewMode("table")}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            viewMode === "table"
+                              ? "bg-white text-[#29343D] shadow-2xs border border-[#E3EAF0]"
+                              : "text-[#7A8792] hover:text-[#29343D]"
+                          }`}
+                          title="List View"
+                        >
+                          <List className="w-3.5 h-3.5" />
+                          <span>List</span>
+                        </button>
+                        <button
+                          onClick={() => setViewMode("grid")}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            viewMode === "grid"
+                              ? "bg-white text-[#29343D] shadow-2xs border border-[#E3EAF0]"
+                              : "text-[#7A8792] hover:text-[#29343D]"
+                          }`}
+                          title="Grid View"
+                        >
+                          <LayoutGrid className="w-3.5 h-3.5" />
+                          <span>Grid</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Category Pills */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1">
+                    {FILE_CATEGORIES.map((cat) => {
+                      const isSelected = categoryFilter === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => setCategoryFilter(cat.id)}
+                          className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-[#D8EEFF] text-[#20628E] border border-[#8CBCE8]/50 shadow-2xs"
+                              : "bg-[#F6F9FC] text-[#7A8792] hover:text-[#29343D] hover:bg-[#E3EAF0]/60 border border-[#E3EAF0]"
+                          }`}
+                        >
+                          {cat.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
+                {/* Results Summary */}
+                <div className="flex items-center justify-between text-xs text-[#7A8792] px-1">
+                  <span>
+                    Showing {processedFiles.length} of {files.length} file(s)
+                  </span>
+                  {(searchTerm || categoryFilter !== "all") && (
+                    <button
+                      onClick={() => {
+                        setSearchTerm("");
+                        setCategoryFilter("all");
+                      }}
+                      className="text-[#20628E] hover:text-[#8CBCE8] font-medium transition-colors cursor-pointer"
+                    >
+                      Reset filters
+                    </button>
+                  )}
+                </div>
+
+                {/* View Rendering */}
                 {viewMode === "table" ? (
                   <FileList
-                    files={files.slice(0, 6)}
+                    files={processedFiles}
                     isLoading={isLoading}
                     onPreview={(f) => setPreviewFile(f)}
                     onDownload={handleDownload}
@@ -360,7 +511,7 @@ export default function UserDashboard() {
                   />
                 ) : (
                   <FileGrid
-                    files={files.slice(0, 6)}
+                    files={processedFiles}
                     isLoading={isLoading}
                     onPreview={(f) => setPreviewFile(f)}
                     onDownload={handleDownload}
@@ -370,149 +521,26 @@ export default function UserDashboard() {
                   />
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* TAB: ALL FILES */}
-          {activeTab === "files" && (
-            <div className="space-y-4">
-              {/* Filter & Search Toolbar */}
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-3">
-                {/* Search & Actions Row */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search files by name or object key..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-sky-500 focus:ring-1 focus:ring-sky-100 transition-colors"
-                    />
-                  </div>
+            {/* TAB 3: CLOUD CONCEPTS & ARCHITECTURE */}
+            {activeTab === "cloud-concepts" && <CloudVsLocalSection />}
 
-                  <div className="flex items-center gap-2">
-                    {/* Sort Dropdown */}
-                    <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700">
-                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 mr-1.5" />
-                      <select
-                        value={sortBy}
-                        onChange={(e) =>
-                          setSortBy(e.target.value as "date" | "name" | "size")
-                        }
-                        className="bg-transparent text-slate-800 focus:outline-none cursor-pointer text-xs"
-                      >
-                        <option value="date">Date</option>
-                        <option value="name">Name</option>
-                        <option value="size">Size</option>
-                      </select>
-                      <button
-                        onClick={() =>
-                          setSortOrder((prev) =>
-                            prev === "asc" ? "desc" : "asc"
-                          )
-                        }
-                        className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
-                        title="Toggle sort direction"
-                      >
-                        {sortOrder.toUpperCase()}
-                      </button>
-                    </div>
-
-                    {/* View Switch: List / Grid */}
-                    <div className="flex items-center bg-slate-100 border border-slate-200 rounded-xl p-0.5 shadow-2xs">
-                      <button
-                        onClick={() => setViewMode("table")}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                          viewMode === "table"
-                            ? "bg-white text-slate-900 shadow-xs"
-                            : "text-slate-500 hover:text-slate-800"
-                        }`}
-                        title="List View"
-                      >
-                        <List className="w-3.5 h-3.5" />
-                        <span>List</span>
-                      </button>
-                      <button
-                        onClick={() => setViewMode("grid")}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                          viewMode === "grid"
-                            ? "bg-white text-slate-900 shadow-xs"
-                            : "text-slate-500 hover:text-slate-800"
-                        }`}
-                        title="Grid View"
-                      >
-                        <LayoutGrid className="w-3.5 h-3.5" />
-                        <span>Grid</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Category Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1">
-                  {FILE_CATEGORIES.map((cat) => {
-                    const isSelected = categoryFilter === cat.id;
-                    return (
-                      <button
-                        key={cat.id}
-                        onClick={() => setCategoryFilter(cat.id)}
-                        className={`px-3 py-1 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                          isSelected
-                            ? "bg-sky-600 text-white shadow-xs"
-                            : "bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200"
-                        }`}
-                      >
-                        {cat.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Results Summary */}
-              <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-                <span>
-                  Showing {processedFiles.length} of {files.length} file(s)
-                </span>
-                {(searchTerm || categoryFilter !== "all") && (
-                  <button
-                    onClick={() => {
-                      setSearchTerm("");
-                      setCategoryFilter("all");
-                    }}
-                    className="text-sky-600 hover:text-sky-700 font-medium transition-colors cursor-pointer"
-                  >
-                    Reset filters
-                  </button>
-                )}
-              </div>
-
-              {/* View Rendering */}
-              {viewMode === "table" ? (
-                <FileList
-                  files={processedFiles}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                  currentUsername={currentUser?.username || currentUser?.name}
-                />
-              ) : (
-                <FileGrid
-                  files={processedFiles}
-                  isLoading={isLoading}
-                  onPreview={(f) => setPreviewFile(f)}
-                  onDownload={handleDownload}
-                  onDelete={(f) => setDeleteTargetFile(f)}
-                  onOpenUpload={() => setIsUploadOpen(true)}
-                  currentUsername={currentUser?.username || currentUser?.name}
-                />
-              )}
-            </div>
-          )}
-        </main>
+            {/* TAB 4: SYSTEM & HEALTH */}
+            {activeTab === "system" && (
+              <SystemHealthSection
+                stats={stats}
+                connectionStatus={stats?.storageHealth === "connected" ? "connected" : "checking"}
+                connectionMessage={
+                  stats?.storageHealth === "connected"
+                    ? `Successfully authenticated to Amazon S3 bucket "${stats?.bucketName}" in region ${stats?.region}.`
+                    : undefined
+                }
+                onCheckHealth={fetchData}
+              />
+            )}
+          </main>
+        </div>
       </div>
 
       {/* Upload Modal */}
@@ -542,4 +570,3 @@ export default function UserDashboard() {
     </div>
   );
 }
-

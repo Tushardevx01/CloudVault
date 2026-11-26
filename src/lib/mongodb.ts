@@ -470,4 +470,3 @@ export async function getFileMetadataMap(): Promise<Map<string, { uploadedBy?: s
     return new Map();
   }
 }
-

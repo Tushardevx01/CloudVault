@@ -4,15 +4,14 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
-  HeadObjectCommand,
   HeadBucketCommand,
   GetBucketLocationCommand,
   _Object,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "crypto";
-import { S3FileItem, FileCategory } from "@/types/file";
-import { getFileCategory, sanitizeFileName, formatBytes } from "./utils";
+import { S3FileItem } from "@/types/file";
+import { getFileCategory, sanitizeFileName } from "./utils";
 
 export interface S3ConfigStatus {
   isValid: boolean;

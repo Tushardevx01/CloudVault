@@ -39,7 +39,7 @@ export default function RootLayout({
         />
       </head>
       <body
-        className="min-h-full flex flex-col bg-slate-50 text-slate-900"
+        className="min-h-full flex flex-col bg-reference-canvas bg-grid-mesh text-[#29343D] antialiased selection:bg-[#D8EEFF] selection:text-[#29343D]"
         suppressHydrationWarning
       >
         {children}
