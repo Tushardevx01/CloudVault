@@ -1,16 +1,41 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import {
-  X,
-  Download,
-  Loader2,
-  Copy,
-  Check,
-} from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { X, Download, Loader2, Copy, Check } from "lucide-react";
 import { S3FileItem } from "@/types/file";
 import { FileIcon } from "../files/FileIcon";
-import { formatBytes, formatDate } from "@/lib/utils";
+import {
+  formatBytes,
+  formatDate,
+  isFilePreviewable,
+  isTextPreviewFile,
+} from "@/lib/utils";
+
+async function copyTextSafe(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back to execCommand on restricted/insecure HTTP contexts
+    }
+  }
+  if (typeof document === "undefined") return false;
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 interface FilePreviewModalProps {
   file: S3FileItem | null;
@@ -26,54 +51,80 @@ export function FilePreviewModal({
   onDownload,
 }: FilePreviewModalProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textTruncated, setTextTruncated] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedContent, setCopiedContent] = useState(false);
+  const copyKeyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyKeyTimerRef.current) clearTimeout(copyKeyTimerRef.current);
+      if (copyContentTimerRef.current) clearTimeout(copyContentTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOpen || !file) {
       setPreviewUrl(null);
+      setTextContent(null);
+      setTextTruncated(false);
       setPreviewError(null);
       return;
     }
 
-    const isPreviewable =
-      file.category === "image" ||
-      file.originalName.toLowerCase().endsWith(".pdf") ||
-      file.category === "code";
-
-    if (!isPreviewable) {
+    if (!isFilePreviewable(file.originalName, file.category)) {
+      setPreviewUrl(null);
+      setTextContent(null);
+      setTextTruncated(false);
+      setPreviewError(null);
       return;
     }
 
-    let isMounted = true;
+    const isText = isTextPreviewFile(file.originalName, file.category);
+    const controller = new AbortController();
+
     setIsLoadingPreview(true);
     setPreviewError(null);
+    setPreviewUrl(null);
+    setTextContent(null);
+    setTextTruncated(false);
 
-    fetch(
-      `/api/files/preview?key=${encodeURIComponent(file.key)}&name=${encodeURIComponent(file.originalName)}`
-    )
-      .then((res) => res.json())
-      .then((data) => {
-        if (isMounted) {
-          if (data.success && data.previewUrl) {
-            setPreviewUrl(data.previewUrl);
-          } else {
-            setPreviewError(data.error || "Unable to generate preview.");
-          }
+    const endpoint = `/api/files/preview?key=${encodeURIComponent(file.key)}${isText ? "&text=true" : ""}`;
+
+    fetch(endpoint, { signal: controller.signal })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || !data.success) {
+          setPreviewError(data.error || "Unable to generate preview.");
+          return;
+        }
+        if (isText && typeof data.content === "string") {
+          setTextContent(data.content);
+          setTextTruncated(Boolean(data.truncated));
+        } else if (data.previewUrl) {
+          setPreviewUrl(data.previewUrl);
+        } else {
+          setPreviewError("Preview payload unavailable.");
         }
       })
-      .catch((err) => {
-        if (isMounted) {
-          setPreviewError(err.message || "Failed to load preview.");
+      .catch((err: unknown) => {
+        const error = err as { name?: string; message?: string };
+        if (error.name !== "AbortError") {
+          setPreviewError(error.message || "Failed to load preview.");
         }
       })
       .finally(() => {
-        if (isMounted) setIsLoadingPreview(false);
+        if (!controller.signal.aborted) {
+          setIsLoadingPreview(false);
+        }
       });
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [isOpen, file]);
 
@@ -81,11 +132,23 @@ export function FilePreviewModal({
 
   const isImage = file.category === "image";
   const isPdf = file.originalName.toLowerCase().endsWith(".pdf");
+  const isText = isTextPreviewFile(file.originalName, file.category);
 
-  const copyKeyToClipboard = () => {
-    navigator.clipboard.writeText(file.key);
+  const copyKeyToClipboard = async () => {
+    const copied = await copyTextSafe(file.key);
+    if (!copied) return;
     setCopiedKey(true);
-    setTimeout(() => setCopiedKey(false), 2000);
+    if (copyKeyTimerRef.current) clearTimeout(copyKeyTimerRef.current);
+    copyKeyTimerRef.current = setTimeout(() => setCopiedKey(false), 2000);
+  };
+
+  const copyTextContent = async () => {
+    if (textContent === null) return;
+    const copied = await copyTextSafe(textContent);
+    if (!copied) return;
+    setCopiedContent(true);
+    if (copyContentTimerRef.current) clearTimeout(copyContentTimerRef.current);
+    copyContentTimerRef.current = setTimeout(() => setCopiedContent(false), 2000);
   };
 
   return (
@@ -136,11 +199,15 @@ export function FilePreviewModal({
           {isLoadingPreview ? (
             <div className="flex flex-col items-center gap-3 py-12 text-[#718096]">
               <Loader2 className="w-8 h-8 animate-spin text-[#78BCE8]" />
-              <p className="text-xs font-medium">Generating secure preview...</p>
+              <p className="text-xs font-medium">
+                Generating secure preview...
+              </p>
             </div>
           ) : previewError ? (
             <div className="text-center py-10 px-4">
-              <p className="text-rose-600 text-xs font-semibold mb-2">{previewError}</p>
+              <p className="text-rose-600 text-xs font-semibold mb-2">
+                {previewError}
+              </p>
               <p className="text-[#718096] text-xs">
                 You can still download the original file directly.
               </p>
@@ -151,6 +218,9 @@ export function FilePreviewModal({
               <img
                 src={previewUrl}
                 alt={file.originalName}
+                onError={() =>
+                  setPreviewError("Image failed to load from preview URL.")
+                }
                 className="max-h-[380px] max-w-full object-contain rounded-2xl shadow-sm border border-[#E3EAF0]"
               />
             </div>
@@ -161,6 +231,35 @@ export function FilePreviewModal({
                 className="w-full h-full bg-white"
                 title={`Preview ${file.originalName}`}
               />
+            </div>
+          ) : isText && textContent !== null ? (
+            <div className="w-full rounded-2xl border border-[#E3EAF0] bg-white overflow-hidden shadow-2xs flex flex-col max-h-[420px]">
+              <div className="px-4 py-2 bg-[#F6F9FC] border-b border-[#E3EAF0] flex items-center justify-between text-[11px] text-[#718096]">
+                <span className="font-mono">
+                  {textTruncated
+                    ? "Showing first 512 KB of file"
+                    : `${textContent.split("\n").length} line(s)`}
+                </span>
+                <button
+                  onClick={copyTextContent}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-[#E3EAF0] text-[#263747] hover:bg-[#DCEEFF]/40 transition-colors cursor-pointer font-semibold"
+                >
+                  {copiedContent ? (
+                    <>
+                      <Check className="w-3 h-3 text-[#72C99A]" />
+                      <span>Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3" />
+                      <span>Copy Text</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <pre className="p-4 text-xs font-mono text-[#263747] overflow-auto whitespace-pre-wrap break-words leading-relaxed">
+                <code>{textContent || "(Empty text content)"}</code>
+              </pre>
             </div>
           ) : (
             <div className="text-center py-12 px-4 max-w-md">
@@ -175,7 +274,8 @@ export function FilePreviewModal({
                 Inline preview not available for this format
               </p>
               <p className="text-xs text-[#718096] mt-1 mb-4">
-                This file is securely stored in your vault. Download the file to view it on your device.
+                This file is securely stored in your vault. Download the file to
+                view it on your device.
               </p>
               <button
                 onClick={() => onDownload(file)}
@@ -214,7 +314,10 @@ export function FilePreviewModal({
                 Storage Key
               </span>
               <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-[#263747] truncate" title={file.key}>
+                <span
+                  className="font-mono text-[#263747] truncate"
+                  title={file.key}
+                >
                   {file.key}
                 </span>
                 <button

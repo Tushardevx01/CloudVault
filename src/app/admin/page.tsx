@@ -28,14 +28,15 @@ import { CloudUser, S3FileItem } from "@/types/file";
 import { FileIcon } from "@/components/files/FileIcon";
 import { FilePreviewModal } from "@/components/modals/FilePreviewModal";
 import { ToastContainer, ToastMessage } from "@/components/ui/Toast";
-import { formatBytes, formatRelativeTime } from "@/lib/utils";
+import { formatBytes, formatRelativeTime, isFilePreviewable } from "@/lib/utils";
+import { downloadCloudFile } from "@/lib/clientDownload";
 
 export default function AdminPage() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [usernameInput, setUsernameInput] = useState("admin");
-  const [passwordInput, setPasswordInput] = useState("Adamas@2023");
+  const [passwordInput, setPasswordInput] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -64,6 +65,7 @@ export default function AdminPage() {
     totalStorageBytes: 0,
     totalStorageFormatted: "0 B",
     databaseStatus: "checking",
+    bucketName: "",
   });
 
   // Toasts
@@ -100,13 +102,20 @@ export default function AdminPage() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setUsers(data.users || []);
+        const fetchedUsers: CloudUser[] = data.users || [];
+        setUsers(fetchedUsers);
+        setSelectedUser((prev) =>
+          prev
+            ? (fetchedUsers.find((u) => u.name === prev.name) ?? null)
+            : null
+        );
         if (data.metrics) {
           setMetrics(data.metrics);
         }
       } else if (res.status === 401) {
         setIsAuthenticated(false);
       } else {
+        setMetrics((prev) => ({ ...prev, databaseStatus: "disconnected" }));
         addToast({
           type: "error",
           title: "Data Fetch Error",
@@ -115,6 +124,7 @@ export default function AdminPage() {
       }
     } catch (err) {
       console.error("Admin fetch error:", err);
+      setMetrics((prev) => ({ ...prev, databaseStatus: "disconnected" }));
     } finally {
       setIsLoadingUsers(false);
       setIsRefreshing(false);
@@ -142,6 +152,8 @@ export default function AdminPage() {
 
       if (res.ok && data.success) {
         setUserFiles(data.files || []);
+      } else if (res.status === 401) {
+        setIsAuthenticated(false);
       } else {
         addToast({
           type: "error",
@@ -181,6 +193,7 @@ export default function AdminPage() {
       const data = await res.json();
 
       if (res.ok && data.success) {
+        setPasswordInput("");
         setIsAuthenticated(true);
         addToast({
           type: "success",
@@ -215,20 +228,26 @@ export default function AdminPage() {
   };
 
   // Download user file
-  const handleDownloadFile = (file: S3FileItem) => {
-    const downloadUrl = `/api/files/download?key=${encodeURIComponent(
-      file.key
-    )}&name=${encodeURIComponent(file.originalName)}`;
-    const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = file.originalName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownloadFile = async (file: S3FileItem) => {
+    const result = await downloadCloudFile(file);
+    if (result.ok) {
+      addToast({
+        type: "info",
+        title: "Download Initiated",
+        message: `Fetching "${file.originalName}" from Amazon S3.`,
+      });
+      return;
+    }
+
+    if (result.status === 401) {
+      setIsAuthenticated(false);
+      return;
+    }
+
     addToast({
-      type: "info",
-      title: "Download Initiated",
-      message: `Fetching "${file.originalName}" from Amazon S3.`,
+      type: "error",
+      title: "Download Failed",
+      message: result.error,
     });
   };
 
@@ -254,6 +273,9 @@ export default function AdminPage() {
         setFileToDelete(null);
         await fetchUserFiles(userName);
         await fetchAdminData();
+      } else if (res.status === 401) {
+        setFileToDelete(null);
+        setIsAuthenticated(false);
       } else {
         addToast({
           type: "error",
@@ -296,6 +318,9 @@ export default function AdminPage() {
           setUserFiles([]);
         }
         await fetchAdminData();
+      } else if (res.status === 401) {
+        setUserToDelete(null);
+        setIsAuthenticated(false);
       } else {
         addToast({
           type: "error",
@@ -428,17 +453,12 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#F6F9FC] border border-[#E3EAF0] text-[11px] text-[#718096] space-y-1">
-                <div className="flex items-center gap-1.5 text-[#263747] font-semibold">
-                  <Lock className="w-3.5 h-3.5 text-[#78BCE8]" />
-                  <span>Academic Evaluation Credential:</span>
-                </div>
-                <p>
-                  Stored and verified via MongoDB:{" "}
-                  <code className="text-[#20628E] font-mono bg-white px-1.5 py-0.5 rounded border border-[#E3EAF0] font-semibold">
-                    Adamas@2023
-                  </code>
-                </p>
+              <div className="p-3 rounded-xl bg-[#F6F9FC] border border-[#E3EAF0] text-[11px] text-[#718096] flex items-center gap-2">
+                <Lock className="w-3.5 h-3.5 text-[#78BCE8] shrink-0" />
+                <span>
+                  Verified via MongoDB administrator credentials (configured via{" "}
+                  <code className="text-[#20628E] font-mono">ADMIN_DEFAULT_PASSWORD</code>).
+                </span>
               </div>
 
               <button
@@ -517,9 +537,31 @@ export default function AdminPage() {
 
           {/* Right Admin Controls */}
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <span className="hidden sm:flex items-center gap-1.5 text-[#1E633C] bg-[#DDF3E4] px-2.5 py-1 rounded-xl border border-[#B7E4C7] text-xs font-semibold">
-              <Database className="w-3.5 h-3.5 text-[#72C99A]" />
-              <span>MongoDB Connected</span>
+            <span
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold ${
+                metrics.databaseStatus === "connected"
+                  ? "text-[#1E633C] bg-[#DDF3E4] border-[#B7E4C7]"
+                  : metrics.databaseStatus === "disconnected"
+                  ? "text-rose-700 bg-rose-50 border-rose-200"
+                  : "text-amber-700 bg-amber-50 border-amber-200"
+              }`}
+            >
+              <Database
+                className={`w-3.5 h-3.5 ${
+                  metrics.databaseStatus === "connected"
+                    ? "text-[#72C99A]"
+                    : metrics.databaseStatus === "disconnected"
+                    ? "text-rose-500"
+                    : "text-amber-500"
+                }`}
+              />
+              <span>
+                {metrics.databaseStatus === "connected"
+                  ? "MongoDB Connected"
+                  : metrics.databaseStatus === "disconnected"
+                  ? "MongoDB Disconnected"
+                  : "Checking MongoDB..."}
+              </span>
             </span>
 
             <button
@@ -616,7 +658,7 @@ export default function AdminPage() {
               </p>
             </div>
             <div className="pt-2 border-t border-[#E3EAF0] text-[11px] text-[#718096] font-mono">
-              Bucket: tushardevx01
+              Bucket: {metrics.bucketName || "Configured S3 Bucket"}
             </div>
           </div>
 
@@ -831,10 +873,10 @@ export default function AdminPage() {
                   ) : (
                     <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
                       {filteredUserFiles.map((file) => {
-                        const isPreviewable =
-                          file.category === "image" ||
-                          file.originalName.toLowerCase().endsWith(".pdf") ||
-                          file.category === "code";
+                        const isPreviewable = isFilePreviewable(
+                          file.originalName,
+                          file.category
+                        );
 
                         return (
                           <div

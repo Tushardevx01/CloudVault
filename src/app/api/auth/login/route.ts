@@ -5,12 +5,21 @@ import {
   USER_COOKIE_NAME,
   USER_SESSION_MAX_AGE_SECONDS,
 } from "@/lib/userAuth";
+import { isSecureRequest, readJsonObject } from "@/lib/token";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const { identifier, username, email, password } = body;
-    const loginId = (identifier || username || email || "").trim();
+    const body = await readJsonObject(request);
+    if (!body) {
+      return NextResponse.json(
+        { success: false, error: "Invalid JSON request body." },
+        { status: 400 }
+      );
+    }
+
+    const rawId = body.identifier ?? body.username ?? body.email;
+    const loginId = typeof rawId === "string" ? rawId.trim() : "";
+    const password = typeof body.password === "string" ? body.password : "";
 
     if (!loginId || !password) {
       return NextResponse.json(
@@ -31,7 +40,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const token = createUserToken(authResult.user);
+    const token = await createUserToken(authResult.user);
 
     const response = NextResponse.json({
       success: true,
@@ -42,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set(USER_COOKIE_NAME, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest(request),
       sameSite: "lax",
       maxAge: USER_SESSION_MAX_AGE_SECONDS,
       path: "/",
@@ -53,9 +62,11 @@ export async function POST(request: NextRequest) {
     const err = error as { message?: string };
     console.error("Login endpoint error:", err);
     return NextResponse.json(
-      { success: false, error: err.message || "Internal server error during login." },
+      {
+        success: false,
+        error: err.message || "Internal server error during login.",
+      },
       { status: 500 }
     );
   }
 }
-

@@ -1,8 +1,17 @@
-import { getDb } from "./mongodb";
+import { getDb } from "./db";
 
 // 131,072 bits = 16 KB of RAM (negligible memory footprint, handles tens of thousands of usernames at <0.5% FPR)
 const DEFAULT_BIT_SIZE = 131072;
 const HASH_COUNT_K = 7;
+
+export const RESERVED_USERNAMES = [
+  "admin",
+  "administrator",
+  "root",
+  "system",
+  "cloudvault",
+  "unassigned",
+] as const;
 
 function fnv1a(str: string): number {
   let hash = 0x811c9dc5;
@@ -28,10 +37,20 @@ export class BloomFilter {
   private insertedCount: number = 0;
   private isInitialized: boolean = false;
 
-  constructor(size: number = DEFAULT_BIT_SIZE, hashCount: number = HASH_COUNT_K) {
+  constructor(
+    size: number = DEFAULT_BIT_SIZE,
+    hashCount: number = HASH_COUNT_K
+  ) {
     this.size = size;
     this.hashCount = hashCount;
     this.bitArray = new Uint8Array(Math.ceil(size / 8));
+    this.seedReservedNames();
+  }
+
+  private seedReservedNames(): void {
+    for (const reserved of RESERVED_USERNAMES) {
+      this.add(reserved);
+    }
   }
 
   /**
@@ -42,7 +61,7 @@ export class BloomFilter {
     const normalized = item.trim().toLowerCase();
     const h1 = fnv1a(normalized);
     let h2 = djb2(normalized);
-    if (h2 === 0) h2 = 1; // ensure non-zero step
+    if (h2 === 0) h2 = 1;
 
     const indices: number[] = [];
     for (let i = 0; i < this.hashCount; i++) {
@@ -78,10 +97,10 @@ export class BloomFilter {
       const byteIdx = Math.floor(idx / 8);
       const bitOffset = idx % 8;
       if ((this.bitArray[byteIdx] & (1 << bitOffset)) === 0) {
-        return false; // guaranteed not present
+        return false;
       }
     }
-    return true; // probably present
+    return true;
   }
 
   public getStats() {
@@ -105,6 +124,27 @@ export class BloomFilter {
 
 declare global {
   var _globalBloomFilter: BloomFilter | undefined;
+  var _globalBloomWarmPromise: Promise<void> | undefined;
+}
+
+/**
+ * Adds a username to the singleton Bloom filter if it has already been warmed.
+ */
+export function addUsernameToBloomIfWarm(username: string): void {
+  const clean = username.trim().toLowerCase();
+  if (!clean) return;
+  const filter = globalThis._globalBloomFilter;
+  if (filter?.getIsInitialized()) {
+    filter.add(clean);
+  }
+}
+
+/**
+ * Resets the Bloom filter singleton so removed usernames are purged on next read.
+ */
+export function invalidateBloomFilter(): void {
+  globalThis._globalBloomFilter = undefined;
+  globalThis._globalBloomWarmPromise = undefined;
 }
 
 /**
@@ -118,30 +158,33 @@ export async function getBloomFilter(): Promise<BloomFilter> {
   const filter = globalThis._globalBloomFilter;
 
   if (!filter.getIsInitialized()) {
-    try {
-      const db = await getDb();
-      const usersCollection = db.collection("users");
-      // Load all existing usernames/names into the bloom filter
-      const users = await usersCollection
-        .find({}, { projection: { name: 1, username: 1 } })
-        .toArray();
+    if (!globalThis._globalBloomWarmPromise) {
+      globalThis._globalBloomWarmPromise = (async () => {
+        try {
+          const db = await getDb();
+          const usersCollection = db.collection("users");
+          const users = await usersCollection
+            .find({}, { projection: { name: 1, username: 1 } })
+            .toArray();
 
-      for (const u of users) {
-        if (u.username) filter.add(u.username);
-        if (u.name) filter.add(u.name);
-      }
+          for (const u of users) {
+            if (typeof u.username === "string" && u.username) {
+              filter.add(u.username);
+            }
+            if (typeof u.name === "string" && u.name) {
+              filter.add(u.name);
+            }
+          }
 
-      // Also reserve default administrative / system namespaces
-      filter.add("admin");
-      filter.add("administrator");
-      filter.add("root");
-      filter.add("system");
-      filter.add("cloudvault");
-
-      filter.setInitialized(true);
-    } catch (err) {
-      console.warn("Could not warm Bloom filter from MongoDB:", err);
+          filter.setInitialized(true);
+        } catch (err) {
+          console.warn("Could not warm Bloom filter from MongoDB:", err);
+        } finally {
+          globalThis._globalBloomWarmPromise = undefined;
+        }
+      })();
     }
+    await globalThis._globalBloomWarmPromise;
   }
 
   return filter;

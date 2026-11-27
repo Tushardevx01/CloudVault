@@ -1,8 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPresignedFileUrl, extractOriginalName, getS3ConfigStatus } from "@/lib/s3";
-import { getFileCategory } from "@/lib/utils";
+import {
+  getPresignedFileUrl,
+  extractOriginalName,
+  getS3ConfigStatus,
+  getS3ObjectTextPreview,
+} from "@/lib/s3";
+import { resolveCanonicalFileInfo } from "@/lib/mongodb";
+import {
+  isCallerFileOwner,
+  parseValidatedKeyParam,
+  requireAuthenticatedCaller,
+} from "@/lib/requestAuth";
+import {
+  getFileCategory,
+  getFileExtension,
+  isTextPreviewFile,
+} from "@/lib/utils";
+import { PRESIGNED_URL_EXPIRY_SECONDS } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to preview files."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   if (!config.isValid) {
     return NextResponse.json(
@@ -11,30 +33,78 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const parsedKey = parseValidatedKeyParam(request);
+  if (!parsedKey.valid) return parsedKey.response;
+  const { key } = parsedKey;
+
   try {
+    const fileInfo = await resolveCanonicalFileInfo(key);
+    if (!fileInfo) {
+      return NextResponse.json(
+        { success: false, error: "Requested file was not found in storage." },
+        { status: 404 }
+      );
+    }
+
+    if (!auth.isAdmin && !isCallerFileOwner(fileInfo.uploadedBy, auth.user)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Permission denied: You can only preview files that you have uploaded.",
+        },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
-    const key = searchParams.get("key");
-    const nameParam = searchParams.get("name");
+    const textMode = searchParams.get("text") === "true";
 
-    if (!key) {
+    const filename = fileInfo.originalName || extractOriginalName(key);
+    const category = getFileCategory(filename, fileInfo.contentType);
+
+    if (textMode) {
+      if (!isTextPreviewFile(filename, category)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Text preview is only supported for code and plain-text files.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const textPreview = await getS3ObjectTextPreview(key);
+      return NextResponse.json({
+        success: true,
+        key,
+        filename,
+        category,
+        content: textPreview.content,
+        truncated: textPreview.truncated,
+        totalSize: textPreview.totalSize,
+      });
+    }
+
+    const isInlineMedia =
+      category === "image" || getFileExtension(filename) === "pdf";
+    if (!isInlineMedia) {
       return NextResponse.json(
-        { success: false, error: "Missing required query parameter: key" },
+        {
+          success: false,
+          error:
+            "Inline URL preview is only supported for image and PDF files.",
+        },
         { status: 400 }
       );
     }
 
-    if (!key.startsWith("uploads/") || key.includes("..")) {
-      return NextResponse.json(
-        { success: false, error: "Invalid object key." },
-        { status: 400 }
-      );
-    }
-
-    const filename = nameParam || extractOriginalName(key);
-    const category = getFileCategory(filename);
-
-    // Presigned inline preview URL valid for 15 minutes
-    const previewUrl = await getPresignedFileUrl(key, "inline", filename, 900);
+    const previewUrl = await getPresignedFileUrl(
+      key,
+      "inline",
+      filename,
+      PRESIGNED_URL_EXPIRY_SECONDS
+    );
 
     return NextResponse.json({
       success: true,
@@ -44,14 +114,25 @@ export async function GET(request: NextRequest) {
       category,
     });
   } catch (error: unknown) {
-    const err = error as { message?: string };
-    console.error("Error generating preview URL:", err);
+    const err = error as {
+      name?: string;
+      message?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    const status =
+      err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404
+        ? 404
+        : 500;
+    console.error("Error generating preview:", err);
     return NextResponse.json(
       {
         success: false,
-        error: err.message || "Failed to generate preview URL.",
+        error:
+          status === 404
+            ? "Requested file was not found in Amazon S3."
+            : err.message || "Failed to generate file preview.",
       },
-      { status: 500 }
+      { status }
     );
   }
 }

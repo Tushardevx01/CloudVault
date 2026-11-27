@@ -1,13 +1,21 @@
 import { NextRequest } from "next/server";
-import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { getDb } from "./mongodb";
-import { getBloomFilter } from "./bloomFilter";
+import { ObjectId } from "mongodb";
+import { getDb } from "./db";
+import { getBloomFilter, RESERVED_USERNAMES } from "./bloomFilter";
+import { escapeRegExp } from "./utils";
+import {
+  extractBearerToken,
+  resolveSigningSecretAsync,
+  signHmacToken,
+  verifyHmacToken,
+} from "./token";
 
-const USER_SESSION_SECRET =
-  process.env.USER_JWT_SECRET || "cloudvault_user_secure_token_secret_2026";
 export const USER_COOKIE_NAME = "cloudvault_user_session";
 export const USER_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
+
+const USERNAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface AuthenticatedUser {
   id: string;
@@ -16,61 +24,106 @@ export interface AuthenticatedUser {
   name: string;
 }
 
-export function createUserToken(user: AuthenticatedUser): string {
-  const payload = {
-    ...user,
-    role: "user",
-    exp: Date.now() + USER_SESSION_MAX_AGE_SECONDS * 1000,
-  };
-  const jsonPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto
-    .createHmac("sha256", USER_SESSION_SECRET)
-    .update(jsonPayload)
-    .digest("base64url");
-  return `${jsonPayload}.${signature}`;
+interface UserTokenPayload extends AuthenticatedUser {
+  role: string;
+  exp: number;
+  [key: string]: unknown;
 }
 
-export function verifyUserToken(token: string): AuthenticatedUser | null {
-  if (!token || !token.includes(".")) return null;
-  const [jsonPayload, signature] = token.split(".");
-  if (!jsonPayload || !signature) return null;
+async function getUserSecret(): Promise<string> {
+  return resolveSigningSecretAsync("USER_JWT_SECRET");
+}
 
-  const expectedSignature = crypto
-    .createHmac("sha256", USER_SESSION_SECRET)
-    .update(jsonPayload)
-    .digest("base64url");
+export async function createUserToken(user: AuthenticatedUser): Promise<string> {
+  return signHmacToken(
+    {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      name: user.name,
+      role: "user",
+    },
+    await getUserSecret(),
+    USER_SESSION_MAX_AGE_SECONDS
+  );
+}
 
-  if (signature !== expectedSignature) return null;
+/**
+ * Verifies a user session token signature, expiration, and ensures the user
+ * account still exists in MongoDB (invalidating sessions of deleted users).
+ */
+export async function verifyUserToken(
+  token: string
+): Promise<AuthenticatedUser | null> {
+  const payload = verifyHmacToken<UserTokenPayload>(
+    token,
+    await getUserSecret()
+  );
+  if (!payload || payload.role !== "user") {
+    return null;
+  }
+  if (typeof payload.id !== "string" || typeof payload.username !== "string") {
+    return null;
+  }
 
   try {
-    const payload = JSON.parse(
-      Buffer.from(jsonPayload, "base64url").toString("utf-8")
-    );
-    if (!payload.exp || Date.now() > payload.exp) {
+    const db = await getDb();
+    const usersCollection = db.collection("users");
+    const cleanUsername = payload.username.trim().toLowerCase();
+
+    const query = ObjectId.isValid(payload.id)
+      ? { _id: new ObjectId(payload.id) }
+      : {
+          $or: [
+            { username: cleanUsername },
+            {
+              name: {
+                $regex: new RegExp(`^${escapeRegExp(cleanUsername)}$`, "i"),
+              },
+            },
+          ],
+        };
+
+    const userDoc = await usersCollection.findOne(query, {
+      projection: { _id: 1, username: 1, email: 1, name: 1 },
+    });
+
+    if (!userDoc) {
       return null;
     }
+
+    const resolvedUsername =
+      (typeof userDoc.username === "string" && userDoc.username) ||
+      payload.username;
+    const resolvedName =
+      (typeof userDoc.name === "string" && userDoc.name) || resolvedUsername;
+    const resolvedEmail =
+      (typeof userDoc.email === "string" && userDoc.email) ||
+      (typeof payload.email === "string" ? payload.email : "");
+
     return {
-      id: payload.id,
-      username: payload.username,
-      email: payload.email,
-      name: payload.name || payload.username,
+      id: userDoc._id.toString(),
+      username: resolvedUsername,
+      email: resolvedEmail,
+      name: resolvedName,
     };
-  } catch {
+  } catch (err) {
+    console.warn("User session verification DB check failed:", err);
     return null;
   }
 }
 
-export function getUserFromRequest(request: NextRequest): AuthenticatedUser | null {
-  const cookie = request.cookies.get(USER_COOKIE_NAME);
-  if (cookie?.value) {
-    const user = verifyUserToken(cookie.value);
-    if (user) return user;
+export async function getUserFromRequest(
+  request: NextRequest
+): Promise<AuthenticatedUser | null> {
+  const bearerToken = extractBearerToken(request);
+  if (bearerToken) {
+    return verifyUserToken(bearerToken);
   }
 
-  const authHeader = request.headers.get("authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.substring(7).trim();
-    return verifyUserToken(token);
+  const cookie = request.cookies.get(USER_COOKIE_NAME);
+  if (cookie?.value) {
+    return verifyUserToken(cookie.value);
   }
 
   return null;
@@ -87,44 +140,75 @@ export async function registerUser({
   username: string;
   email: string;
   password: string;
-}): Promise<{ success: boolean; user?: AuthenticatedUser; error?: string }> {
+}): Promise<{
+  success: boolean;
+  user?: AuthenticatedUser;
+  error?: string;
+  conflict?: boolean;
+}> {
   try {
     const cleanUsername = username.trim().toLowerCase();
     const cleanEmail = email.trim().toLowerCase();
 
-    if (!cleanUsername || cleanUsername.length < 3) {
-      return { success: false, error: "Username must be at least 3 characters." };
-    }
-    if (!/^[a-zA-Z0-9_.-]+$/.test(cleanUsername)) {
+    if (!cleanUsername || cleanUsername.length < 3 || cleanUsername.length > 32) {
       return {
         success: false,
-        error: "Username can only contain letters, numbers, underscores, and dashes.",
+        error: "Username must be between 3 and 32 characters.",
       };
     }
-    if (!cleanEmail || !cleanEmail.includes("@")) {
+    if (!USERNAME_REGEX.test(cleanUsername)) {
+      return {
+        success: false,
+        error:
+          "Username can only contain letters, numbers, dots, underscores, and dashes.",
+      };
+    }
+    if ((RESERVED_USERNAMES as readonly string[]).includes(cleanUsername)) {
+      return {
+        success: false,
+        conflict: true,
+        error: "This username is reserved.",
+      };
+    }
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
       return { success: false, error: "Please provide a valid email address." };
     }
     if (!password || password.length < 6) {
-      return { success: false, error: "Password must be at least 6 characters." };
+      return {
+        success: false,
+        error: "Password must be at least 6 characters.",
+      };
     }
 
     const db = await getDb();
     const usersCollection = db.collection("users");
+    const nameRegex = new RegExp(`^${escapeRegExp(cleanUsername)}$`, "i");
+    const emailRegex = new RegExp(`^${escapeRegExp(cleanEmail)}$`, "i");
 
-    // Double check availability against database
     const existing = await usersCollection.findOne({
       $or: [
         { username: cleanUsername },
-        { name: cleanUsername },
-        { email: cleanEmail },
+        { name: { $regex: nameRegex } },
+        { email: { $regex: emailRegex } },
       ],
     });
 
     if (existing) {
-      if (existing.email === cleanEmail) {
-        return { success: false, error: "An account with this email already exists." };
+      if (
+        typeof existing.email === "string" &&
+        existing.email.toLowerCase() === cleanEmail
+      ) {
+        return {
+          success: false,
+          conflict: true,
+          error: "An account with this email already exists.",
+        };
       }
-      return { success: false, error: "This username is already taken." };
+      return {
+        success: false,
+        conflict: true,
+        error: "This username is already taken.",
+      };
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
@@ -142,7 +226,6 @@ export async function registerUser({
       totalSizeBytes: 0,
     });
 
-    // Add to in-memory Bloom Filter immediately
     const bloom = await getBloomFilter();
     bloom.add(cleanUsername);
 
@@ -156,9 +239,19 @@ export async function registerUser({
       },
     };
   } catch (err: unknown) {
-    const error = err as { message?: string };
+    const error = err as { code?: number; message?: string };
+    if (error.code === 11000) {
+      return {
+        success: false,
+        conflict: true,
+        error: "An account with this username or email already exists.",
+      };
+    }
     console.error("User registration error:", error);
-    return { success: false, error: error.message || "Failed to register user." };
+    return {
+      success: false,
+      error: error.message || "Failed to register user.",
+    };
   }
 }
 
@@ -175,17 +268,21 @@ export async function authenticateUser({
   try {
     const cleanId = identifier.trim().toLowerCase();
     if (!cleanId || !password) {
-      return { success: false, error: "Username/email and password are required." };
+      return {
+        success: false,
+        error: "Username/email and password are required.",
+      };
     }
 
     const db = await getDb();
     const usersCollection = db.collection("users");
+    const idRegex = new RegExp(`^${escapeRegExp(cleanId)}$`, "i");
 
     const user = await usersCollection.findOne({
       $or: [
         { username: cleanId },
-        { name: cleanId },
-        { email: cleanId },
+        { name: { $regex: idRegex } },
+        { email: { $regex: idRegex } },
       ],
     });
 
@@ -196,7 +293,8 @@ export async function authenticateUser({
     if (!user.passwordHash) {
       return {
         success: false,
-        error: "This account was created without a password. Please sign up or reset password.",
+        error:
+          "This account was created without a password. Please sign up or contact an administrator.",
       };
     }
 
@@ -205,7 +303,6 @@ export async function authenticateUser({
       return { success: false, error: "Invalid username or password." };
     }
 
-    // Update last login
     await usersCollection.updateOne(
       { _id: user._id },
       { $set: { lastActiveAt: new Date() } }
@@ -223,7 +320,9 @@ export async function authenticateUser({
   } catch (err: unknown) {
     const error = err as { message?: string };
     console.error("User login error:", error);
-    return { success: false, error: error.message || "Database authentication error." };
+    return {
+      success: false,
+      error: error.message || "Database authentication error.",
+    };
   }
 }
-

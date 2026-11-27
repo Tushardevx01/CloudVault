@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToS3, getS3ConfigStatus } from "@/lib/s3";
 import { recordFileUpload } from "@/lib/mongodb";
-import { getUserFromRequest } from "@/lib/userAuth";
+import { requireAuthenticatedCaller } from "@/lib/requestAuth";
+import { MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_FORMATTED } from "@/lib/constants";
 import { S3FileItem } from "@/types/file";
 
-// 50MB maximum single file size for standard route handler
-const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
-
 export async function POST(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to upload files."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   if (!config.isValid) {
     return NextResponse.json(
@@ -18,19 +22,13 @@ export async function POST(request: NextRequest) {
 
   try {
     const formData = await request.formData();
-    const files = formData.getAll("files") as File[];
-    const sessionUser = getUserFromRequest(request);
-    const userName =
-      (formData.get("userName") as string)?.trim() ||
-      (formData.get("uploaderName") as string)?.trim() ||
-      sessionUser?.username ||
-      sessionUser?.name ||
-      "Community";
+    const files = formData
+      .getAll("files")
+      .filter((entry): entry is File => entry instanceof File);
 
-    if (!files || files.length === 0) {
-      // Check single "file" fallback
-      const singleFile = formData.get("file") as File | null;
-      if (singleFile) {
+    if (files.length === 0) {
+      const singleFile = formData.get("file");
+      if (singleFile instanceof File) {
         files.push(singleFile);
       }
     }
@@ -42,22 +40,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const uploadedItems: S3FileItem[] = [];
-    const errors: { name: string; error: string }[] = [];
+    // Derive uploader from verified session; admins may explicitly target a userName
+    const adminRequestedUser = auth.isAdmin
+      ? (formData.get("userName") as string | null)?.trim()
+      : undefined;
+    const uploaderName =
+      (adminRequestedUser && auth.isAdmin ? adminRequestedUser : undefined) ||
+      auth.user?.username ||
+      auth.user?.name ||
+      auth.adminUsername ||
+      "admin";
 
-    for (const file of files) {
-      if (!file || !file.name) continue;
+    const uploadedItems: S3FileItem[] = [];
+    const errors: { index: number; name: string; error: string }[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file.name || !file.name.trim()) {
+        errors.push({
+          index: i,
+          name: "(unnamed)",
+          error: "File must have a valid filename.",
+        });
+        continue;
+      }
 
       if (file.size > MAX_FILE_SIZE_BYTES) {
         errors.push({
+          index: i,
           name: file.name,
-          error: `File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds maximum limit of 50MB.`,
+          error: `File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds maximum limit of ${MAX_FILE_SIZE_FORMATTED}.`,
         });
         continue;
       }
 
       if (file.size === 0) {
         errors.push({
+          index: i,
           name: file.name,
           error: "Empty files cannot be uploaded.",
         });
@@ -72,10 +91,9 @@ export async function POST(request: NextRequest) {
           buffer,
           originalFileName: file.name,
           contentType: file.type || "application/octet-stream",
-          uploadedBy: userName,
+          uploadedBy: uploaderName,
         });
 
-        // Record in MongoDB
         try {
           await recordFileUpload({
             key: uploaded.key,
@@ -83,8 +101,9 @@ export async function POST(request: NextRequest) {
             size: uploaded.size,
             contentType: uploaded.contentType,
             category: uploaded.category,
-            uploadedBy: userName,
+            uploadedBy: uploaderName,
             uploadedAt: new Date(uploaded.lastModified),
+            eTag: uploaded.eTag,
           });
         } catch (dbErr) {
           console.warn("MongoDB record upload warning:", dbErr);
@@ -94,6 +113,7 @@ export async function POST(request: NextRequest) {
       } catch (err: unknown) {
         const error = err as { message?: string };
         errors.push({
+          index: i,
           name: file.name,
           error: error.message || "Failed to upload file to Amazon S3.",
         });

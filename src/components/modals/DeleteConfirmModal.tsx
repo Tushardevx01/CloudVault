@@ -9,7 +9,7 @@ interface DeleteConfirmModalProps {
   file: S3FileItem | null;
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (file: S3FileItem) => Promise<void>;
+  onConfirm: (file: S3FileItem) => Promise<boolean | void>;
 }
 
 export function DeleteConfirmModal({
@@ -25,8 +25,10 @@ export function DeleteConfirmModal({
   const handleDelete = async () => {
     try {
       setIsDeleting(true);
-      await onConfirm(file);
-      onClose();
+      const ok = await onConfirm(file);
+      if (ok !== false) {
+        onClose();
+      }
     } finally {
       setIsDeleting(false);
     }

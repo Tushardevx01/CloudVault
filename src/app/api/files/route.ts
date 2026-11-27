@@ -1,16 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listS3Files, deleteS3File, getS3ConfigStatus } from "@/lib/s3";
+import { deleteS3File, getS3ConfigStatus } from "@/lib/s3";
 import {
+  listEnrichedS3Files,
   removeFileRecord,
-  getFileMetadataMap,
-  syncS3FilesWithMongo,
-  getDb,
+  resolveCanonicalFileInfo,
 } from "@/lib/mongodb";
-import { isAdminAuthenticated } from "@/lib/adminAuth";
-import { getUserFromRequest } from "@/lib/userAuth";
+import {
+  isCallerFileOwner,
+  parseValidatedKeyParam,
+  requireAuthenticatedCaller,
+} from "@/lib/requestAuth";
 import { FileCategory, S3FileItem } from "@/types/file";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to list files."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   if (!config.isValid) {
     return NextResponse.json(
@@ -26,28 +34,20 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
-    const category = searchParams.get("category") as FileCategory | "all" | null;
-    const sortBy = searchParams.get("sortBy") || "date"; // 'date' | 'name' | 'size'
-    const sortOrder = searchParams.get("sortOrder") || "desc"; // 'asc' | 'desc'
+    const category = searchParams.get("category") as
+      | FileCategory
+      | "all"
+      | null;
+    const sortBy = searchParams.get("sortBy") || "date";
+    const sortOrder = searchParams.get("sortOrder") === "asc" ? "asc" : "desc";
 
-    let files = await listS3Files();
+    let files = await listEnrichedS3Files({ sync: true });
 
-    // Attach uploader info from MongoDB
-    try {
-      await syncS3FilesWithMongo(files);
-      const metaMap = await getFileMetadataMap();
-      files = files.map((f) => {
-        const meta = metaMap.get(f.key);
-        return {
-          ...f,
-          uploadedBy: meta?.uploadedBy || f.uploadedBy || "Community",
-        };
-      });
-    } catch {
-      // ignore
+    // Scope listing strictly to the signed-in user unless the caller is admin-only
+    if (auth.user) {
+      files = files.filter((f) => isCallerFileOwner(f.uploadedBy, auth.user));
     }
 
-    // Search filter
     if (search) {
       files = files.filter(
         (f) =>
@@ -56,12 +56,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Category filter
     if (category && category !== "all") {
       files = files.filter((f) => f.category === category);
     }
 
-    // Sorting
     files.sort((a: S3FileItem, b: S3FileItem) => {
       let comparison = 0;
       if (sortBy === "name") {
@@ -69,9 +67,9 @@ export async function GET(request: NextRequest) {
       } else if (sortBy === "size") {
         comparison = a.size - b.size;
       } else {
-        // default date
         comparison =
-          new Date(a.lastModified).getTime() - new Date(b.lastModified).getTime();
+          new Date(a.lastModified).getTime() -
+          new Date(b.lastModified).getTime();
       }
       return sortOrder === "asc" ? comparison : -comparison;
     });
@@ -95,6 +93,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to delete files."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   if (!config.isValid) {
     return NextResponse.json(
@@ -103,54 +107,26 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
+  const parsedKey = parseValidatedKeyParam(request);
+  if (!parsedKey.valid) return parsedKey.response;
+  const { key } = parsedKey;
+
   try {
-    const { searchParams } = new URL(request.url);
-    const key = searchParams.get("key");
+    if (auth.user) {
+      const info = await resolveCanonicalFileInfo(key);
+      if (!info) {
+        return NextResponse.json(
+          { success: false, error: "Requested file was not found." },
+          { status: 404 }
+        );
+      }
 
-    if (!key) {
-      return NextResponse.json(
-        { success: false, error: "Missing required query parameter: key" },
-        { status: 400 }
-      );
-    }
-
-    // Security check: Key must be within 'uploads/' prefix and not contain directory traversal
-    if (!key.startsWith("uploads/") || key.includes("..")) {
-      return NextResponse.json(
-        { success: false, error: "Invalid object key or unauthorized path." },
-        { status: 400 }
-      );
-    }
-
-    // 1. Authorization check: Admin or authenticated user
-    const isAdmin = isAdminAuthenticated(request);
-    const sessionUser = getUserFromRequest(request);
-
-    if (!isAdmin && !sessionUser) {
-      return NextResponse.json(
-        { success: false, error: "Authentication required to delete files." },
-        { status: 401 }
-      );
-    }
-
-    // 2. Normal user permission check: only allowed to delete their own files
-    if (!isAdmin && sessionUser) {
-      const db = await getDb();
-      const fileRecord = await db.collection("files").findOne({ key });
-
-      const fileOwner = fileRecord?.uploadedBy?.toLowerCase()?.trim();
-      const currentUserName = sessionUser.username?.toLowerCase()?.trim();
-      const currentDisplayName = sessionUser.name?.toLowerCase()?.trim();
-
-      const isOwner =
-        fileOwner &&
-        (fileOwner === currentUserName || fileOwner === currentDisplayName);
-
-      if (!isOwner) {
+      if (!isCallerFileOwner(info.uploadedBy, auth.user)) {
         return NextResponse.json(
           {
             success: false,
-            error: "Permission denied: You can only delete files that you have uploaded.",
+            error:
+              "Permission denied: You can only delete files that you have uploaded.",
           },
           { status: 403 }
         );
@@ -159,10 +135,9 @@ export async function DELETE(request: NextRequest) {
 
     await deleteS3File(key);
 
-    try {
-      await removeFileRecord(key);
-    } catch (mongoErr) {
-      console.warn("MongoDB delete record warning:", mongoErr);
+    const dbResult = await removeFileRecord(key);
+    if (!dbResult.success) {
+      console.warn(`MongoDB delete record warning for key ${key}`);
     }
 
     return NextResponse.json({

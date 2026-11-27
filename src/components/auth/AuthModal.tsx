@@ -62,20 +62,51 @@ export function AuthModal({
 
   // Admin state
   const [adminUsername, setAdminUsername] = useState("admin");
-  const [adminPassword, setAdminPassword] = useState("Adamas@2023");
+  const [adminPassword, setAdminPassword] = useState("");
   const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [isSubmittingAdmin, setIsSubmittingAdmin] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
 
-  const checkDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const checkDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const signupSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    setMode(defaultTab);
+    if (isOpen) {
+      setMode(defaultTab);
+      return;
+    }
+
+    if (checkDebounceRef.current) clearTimeout(checkDebounceRef.current);
+    if (signupSwitchTimerRef.current) clearTimeout(signupSwitchTimerRef.current);
+    setLoginPassword("");
+    setSignupPassword("");
+    setAdminPassword("");
+    setLoginError(null);
+    setSignupError(null);
+    setSignupSuccessMsg(null);
+    setAdminError(null);
+    setUsernameStatus(null);
+    setIsCheckingUsername(false);
   }, [defaultTab, isOpen]);
+
+  useEffect(() => {
+    if (mode !== "signup" && signupSwitchTimerRef.current) {
+      clearTimeout(signupSwitchTimerRef.current);
+      signupSwitchTimerRef.current = null;
+      setSignupSuccessMsg(null);
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    return () => {
+      if (checkDebounceRef.current) clearTimeout(checkDebounceRef.current);
+      if (signupSwitchTimerRef.current) clearTimeout(signupSwitchTimerRef.current);
+    };
+  }, []);
 
   // Debounced Username availability check using Bloom Filter API
   useEffect(() => {
-    if (mode !== "signup") return;
+    if (!isOpen || mode !== "signup") return;
 
     const trimmed = signupUsername.trim();
     if (!trimmed) {
@@ -100,7 +131,7 @@ export function AuthModal({
         available: false,
         method: "validation",
         hitsDb: false,
-        message: "Letters, numbers, underscores, and dashes only",
+        message: "Letters, numbers, dots, underscores, and dashes only",
       });
       setIsCheckingUsername(false);
       return;
@@ -112,31 +143,43 @@ export function AuthModal({
       clearTimeout(checkDebounceRef.current);
     }
 
+    const controller = new AbortController();
+
     checkDebounceRef.current = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/auth/check-username?username=${encodeURIComponent(trimmed)}`
+          `/api/auth/check-username?username=${encodeURIComponent(trimmed)}`,
+          { signal: controller.signal }
         );
         const data = await res.json();
-        if (data.success) {
+        if (res.ok && data.success) {
           setUsernameStatus({
             available: data.available,
             message: data.message,
             method: data.method,
             hitsDb: data.hitsDb,
           });
+        } else {
+          setUsernameStatus(null);
         }
-      } catch (err) {
-        console.error("Failed to check username availability:", err);
+      } catch (err: unknown) {
+        const error = err as { name?: string };
+        if (error.name !== "AbortError") {
+          console.error("Failed to check username availability:", err);
+          setUsernameStatus(null);
+        }
       } finally {
-        setIsCheckingUsername(false);
+        if (!controller.signal.aborted) {
+          setIsCheckingUsername(false);
+        }
       }
     }, 280);
 
     return () => {
+      controller.abort();
       if (checkDebounceRef.current) clearTimeout(checkDebounceRef.current);
     };
-  }, [signupUsername, mode]);
+  }, [signupUsername, mode, isOpen]);
 
   if (!isOpen) return null;
 
@@ -206,7 +249,9 @@ export function AuthModal({
 
       if (res.ok && data.success) {
         setSignupSuccessMsg("Account created successfully! Switching to sign in...");
-        setTimeout(() => {
+        if (signupSwitchTimerRef.current) clearTimeout(signupSwitchTimerRef.current);
+        signupSwitchTimerRef.current = setTimeout(() => {
+          signupSwitchTimerRef.current = null;
           setLoginIdentifier(signupUsername);
           setLoginPassword("");
           setMode("signin");
@@ -579,7 +624,7 @@ export function AuthModal({
                     required
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="Adamas@2023"
+                    placeholder="Enter administrator password"
                     className="w-full bg-[#F6F9FC] border border-[#E3EAF0] rounded-xl pl-10 pr-10 py-2.5 text-xs text-[#263747] placeholder:text-[#718096] focus:outline-none focus:bg-white focus:border-[#78BCE8] focus:ring-2 focus:ring-[#DCEEFF] transition-all font-mono"
                   />
                   <button

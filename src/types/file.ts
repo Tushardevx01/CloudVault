@@ -56,6 +56,7 @@ export interface AdminDashboardData {
   totalStorageBytes: number;
   totalStorageFormatted: string;
   databaseStatus: "connected" | "disconnected";
+  bucketName?: string;
 }
 
 export interface ApiResponse<T = unknown> {

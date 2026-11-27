@@ -5,13 +5,25 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   GetBucketLocationCommand,
   _Object,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "crypto";
 import { S3FileItem } from "@/types/file";
-import { getFileCategory, sanitizeFileName } from "./utils";
+import {
+  buildContentDisposition,
+  getFileCategory,
+  getFileExtension,
+  sanitizeFileName,
+} from "./utils";
+import {
+  DEFAULT_AWS_REGION,
+  DEFAULT_BUCKET_NAME,
+  PRESIGNED_URL_EXPIRY_SECONDS,
+  S3_UPLOAD_PREFIX,
+} from "./constants";
 
 export interface S3ConfigStatus {
   isValid: boolean;
@@ -23,22 +35,62 @@ export interface S3ConfigStatus {
   errorMessage?: string;
 }
 
-let resolvedRegion: string | null = null;
-let cachedS3Client: S3Client | null = null;
+export interface S3ObjectMeta {
+  originalName?: string;
+  uploadedBy?: string;
+  category?: string;
+  contentType?: string;
+  uploadedAt?: string;
+  eTag?: string;
+}
+
+declare global {
+  var _s3ResolvedRegion: string | null | undefined;
+  var _s3CachedClient: S3Client | null | undefined;
+  var _s3CachedClientKey: string | undefined;
+  var _s3RegionResolutionPromise: Promise<string> | null | undefined;
+  var _s3RegionVerified: boolean | undefined;
+}
+
+function normalizeS3LocationConstraint(constraint?: string | null): string {
+  if (!constraint) return "us-east-1";
+  if (constraint === "EU") return "eu-west-1";
+  return constraint;
+}
+
+function extractRegionFromS3Error(error: unknown): string | null {
+  const err = error as {
+    $response?: { headers?: Record<string, string | undefined> };
+  };
+  const headers = err.$response?.headers;
+  if (!headers) return null;
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === "x-amz-bucket-region" && v?.trim()) {
+      return v.trim();
+    }
+  }
+  return null;
+}
+
+function isSafeInlinePreviewMime(mimeType: string): boolean {
+  const normalized = mimeType.split(";")[0].trim().toLowerCase();
+  return normalized.startsWith("image/") || normalized === "application/pdf";
+}
 
 /**
  * Validate AWS S3 configuration from environment variables safely.
  * Never exposes the actual keys.
  */
 export function getS3ConfigStatus(): S3ConfigStatus {
-  const region = process.env.AWS_REGION || "ap-south-1";
-  const bucketName = process.env.AWS_S3_BUCKET_NAME || "tushardevx01";
+  const region = process.env.AWS_REGION?.trim() || DEFAULT_AWS_REGION;
+  const bucketName =
+    process.env.AWS_S3_BUCKET_NAME?.trim() || DEFAULT_BUCKET_NAME;
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID || "";
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || "";
 
   const missing: string[] = [];
-  if (!region.trim()) missing.push("AWS_REGION");
-  if (!bucketName.trim()) missing.push("AWS_S3_BUCKET_NAME");
+  if (!region) missing.push("AWS_REGION");
+  if (!bucketName) missing.push("AWS_S3_BUCKET_NAME");
   if (!accessKeyId.trim()) missing.push("AWS_ACCESS_KEY_ID");
   if (!secretAccessKey.trim()) missing.push("AWS_SECRET_ACCESS_KEY");
 
@@ -46,7 +98,7 @@ export function getS3ConfigStatus(): S3ConfigStatus {
     isValid: missing.length === 0,
     missingVariables: missing,
     bucketName,
-    region,
+    region: globalThis._s3ResolvedRegion || region,
     hasAccessKey: Boolean(accessKeyId.trim()),
     hasSecretKey: Boolean(secretAccessKey.trim()),
     errorMessage:
@@ -54,6 +106,17 @@ export function getS3ConfigStatus(): S3ConfigStatus {
         ? `Missing required AWS configuration: ${missing.join(", ")} in .env`
         : undefined,
   };
+}
+
+/**
+ * Returns the currently effective AWS region (including auto-resolved overrides).
+ */
+export function getEffectiveRegion(): string {
+  return (
+    globalThis._s3ResolvedRegion ||
+    process.env.AWS_REGION?.trim() ||
+    DEFAULT_AWS_REGION
+  );
 }
 
 /**
@@ -67,58 +130,126 @@ export function getS3Client(): S3Client {
     );
   }
 
-  if (!cachedS3Client) {
-    cachedS3Client = new S3Client({
-      region: resolvedRegion || status.region,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
-      },
+  const effectiveRegion = getEffectiveRegion();
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID!.trim();
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY!.trim();
+  const clientKey = `${effectiveRegion}:${accessKeyId}`;
+
+  if (
+    !globalThis._s3CachedClient ||
+    globalThis._s3CachedClientKey !== clientKey
+  ) {
+    globalThis._s3CachedClient = new S3Client({
+      region: effectiveRegion,
+      credentials: { accessKeyId, secretAccessKey },
     });
+    globalThis._s3CachedClientKey = clientKey;
   }
 
-  return cachedS3Client;
+  return globalThis._s3CachedClient;
 }
 
 /**
  * Resolves the actual AWS region of the bucket if a 301 PermanentRedirect occurs.
  */
-async function autoResolveBucketRegion(bucketName: string): Promise<string> {
+async function autoResolveBucketRegion(
+  bucketName: string,
+  hintRegion?: string | null
+): Promise<string> {
+  if (hintRegion) {
+    globalThis._s3ResolvedRegion = hintRegion;
+    globalThis._s3CachedClient = null;
+    globalThis._s3RegionVerified = true;
+    return hintRegion;
+  }
+
+  if (globalThis._s3RegionResolutionPromise) {
+    return globalThis._s3RegionResolutionPromise;
+  }
+
+  globalThis._s3RegionResolutionPromise = (async () => {
+    try {
+      const resolver = new S3Client({
+        region: "us-east-1",
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
+        },
+      });
+      const loc = await resolver.send(
+        new GetBucketLocationCommand({ Bucket: bucketName })
+      );
+      const actual = normalizeS3LocationConstraint(loc.LocationConstraint);
+      globalThis._s3ResolvedRegion = actual;
+      globalThis._s3CachedClient = null;
+      globalThis._s3RegionVerified = true;
+      return actual;
+    } catch (err) {
+      const fallbackHint = extractRegionFromS3Error(err);
+      if (fallbackHint) {
+        globalThis._s3ResolvedRegion = fallbackHint;
+        globalThis._s3CachedClient = null;
+        globalThis._s3RegionVerified = true;
+        return fallbackHint;
+      }
+      console.warn("Could not auto-resolve bucket region:", err);
+      return getEffectiveRegion();
+    } finally {
+      globalThis._s3RegionResolutionPromise = null;
+    }
+  })();
+
+  return globalThis._s3RegionResolutionPromise;
+}
+
+/**
+ * Wraps S3 operations with automatic region redirection handling.
+ */
+async function executeWithAutoRegion<T>(
+  operation: (client: S3Client) => Promise<T>
+): Promise<T> {
+  const client = getS3Client();
   try {
-    const resolver = new S3Client({
-      region: "us-east-1",
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
-      },
-    });
-    const loc = await resolver.send(new GetBucketLocationCommand({ Bucket: bucketName }));
-    const actual = loc.LocationConstraint || "us-east-1";
-    resolvedRegion = actual;
-    cachedS3Client = null; // force recreation with actual region
-    return actual;
-  } catch (err) {
-    console.warn("Could not auto-resolve bucket region:", err);
-    return resolvedRegion || process.env.AWS_REGION || "ap-southeast-2";
+    const result = await operation(client);
+    globalThis._s3RegionVerified = true;
+    return result;
+  } catch (error: unknown) {
+    const err = error as {
+      name?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    const headerRegion = extractRegionFromS3Error(error);
+    const shouldRedirect =
+      err.name === "PermanentRedirect" ||
+      err.$metadata?.httpStatusCode === 301 ||
+      (headerRegion !== null && headerRegion !== getEffectiveRegion());
+
+    if (shouldRedirect) {
+      await autoResolveBucketRegion(getBucketName(), headerRegion);
+      const newClient = getS3Client();
+      const retryResult = await operation(newClient);
+      globalThis._s3RegionVerified = true;
+      return retryResult;
+    }
+    throw error;
   }
 }
 
 /**
- * Wraps S3 operations with automatic region redirection handling
+ * Ensures the active S3 bucket region has been validated via an S3 API call before signing URLs.
  */
-async function executeWithAutoRegion<T>(operation: (client: S3Client) => Promise<T>): Promise<T> {
-  const client = getS3Client();
+async function ensureBucketRegionResolved(): Promise<void> {
+  if (globalThis._s3RegionVerified) return;
+  const bucket = getBucketName();
   try {
-    return await operation(client);
+    await executeWithAutoRegion(async (client) => {
+      await client.send(new HeadBucketCommand({ Bucket: bucket }));
+    });
   } catch (error: unknown) {
-    const err = error as { name?: string; $metadata?: { httpStatusCode?: number } };
-    if (err.name === "PermanentRedirect" || err.$metadata?.httpStatusCode === 301) {
-      const bucket = getBucketName();
-      await autoResolveBucketRegion(bucket);
-      const newClient = getS3Client();
-      return await operation(newClient);
+    const headerRegion = extractRegionFromS3Error(error);
+    if (headerRegion && headerRegion !== getEffectiveRegion()) {
+      await autoResolveBucketRegion(bucket, headerRegion);
     }
-    throw error;
   }
 }
 
@@ -126,7 +257,7 @@ async function executeWithAutoRegion<T>(operation: (client: S3Client) => Promise
  * Returns the configured bucket name.
  */
 export function getBucketName(): string {
-  return process.env.AWS_S3_BUCKET_NAME?.trim() || "tushardevx01";
+  return process.env.AWS_S3_BUCKET_NAME?.trim() || DEFAULT_BUCKET_NAME;
 }
 
 /**
@@ -139,14 +270,17 @@ export function generateObjectKey(originalFileName: string): {
   const sanitizedName = sanitizeFileName(originalFileName);
   const timestamp = Date.now();
   const randomSuffix = crypto.randomBytes(4).toString("hex");
-  const key = `uploads/${timestamp}-${randomSuffix}-${sanitizedName}`;
+  const key = `${S3_UPLOAD_PREFIX}${timestamp}-${randomSuffix}-${sanitizedName}`;
   return { key, sanitizedName };
 }
 
 /**
- * Extract human readable original filename from S3 key or metadata
+ * Extract human readable original filename from S3 key or metadata.
  */
-export function extractOriginalName(key: string, metadataName?: string): string {
+export function extractOriginalName(
+  key: string,
+  metadataName?: string
+): string {
   if (metadataName && metadataName.trim().length > 0) {
     return metadataName.trim();
   }
@@ -156,6 +290,15 @@ export function extractOriginalName(key: string, metadataName?: string): string 
     return match[1];
   }
   return cleaned;
+}
+
+function safeDecodeURIComponent(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -182,24 +325,35 @@ export async function testS3Connectivity(): Promise<{
       await client.send(new HeadBucketCommand({ Bucket: status.bucketName }));
     });
 
+    const effectiveRegion = getEffectiveRegion();
     return {
       connected: true,
-      message: `Successfully connected to Amazon S3 bucket "${status.bucketName}" (${status.region}).`,
+      message: `Successfully connected to Amazon S3 bucket "${status.bucketName}" (${effectiveRegion}).`,
       bucket: status.bucketName,
-      region: status.region,
+      region: effectiveRegion,
     };
   } catch (error: unknown) {
-    const err = error as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+    const err = error as {
+      name?: string;
+      message?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    const effectiveRegion = getEffectiveRegion();
     let friendlyMessage = "Failed to connect to Amazon S3.";
 
     if (err.name === "NotFound" || err.$metadata?.httpStatusCode === 404) {
-      friendlyMessage = `Bucket "${status.bucketName}" was not found in region "${status.region}".`;
-    } else if (err.name === "AccessDenied" || err.$metadata?.httpStatusCode === 403) {
+      friendlyMessage = `Bucket "${status.bucketName}" was not found in region "${effectiveRegion}".`;
+    } else if (
+      err.name === "AccessDenied" ||
+      err.$metadata?.httpStatusCode === 403
+    ) {
       friendlyMessage = `Access Denied: The IAM credentials do not have permission to access bucket "${status.bucketName}".`;
     } else if (err.name === "InvalidAccessKeyId") {
-      friendlyMessage = "AWS Access Key ID provided does not exist in our records.";
+      friendlyMessage =
+        "AWS Access Key ID provided does not exist in our records.";
     } else if (err.name === "SignatureDoesNotMatch") {
-      friendlyMessage = "AWS Secret Access Key is invalid or signature calculation failed.";
+      friendlyMessage =
+        "AWS Secret Access Key is invalid or signature calculation failed.";
     } else if (err.message) {
       friendlyMessage = err.message;
     }
@@ -208,40 +362,52 @@ export async function testS3Connectivity(): Promise<{
       connected: false,
       message: friendlyMessage,
       bucket: status.bucketName,
-      region: status.region,
+      region: effectiveRegion,
     };
   }
 }
 
 /**
- * List all files in the bucket with metadata.
+ * List all files in the bucket with full ContinuationToken pagination.
  */
 export async function listS3Files(): Promise<S3FileItem[]> {
   const bucket = getBucketName();
+  const contents: _Object[] = [];
+  let continuationToken: string | undefined;
 
-  const response = await executeWithAutoRegion(async (client) => {
-    const command = new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: "uploads/",
+  do {
+    const response = await executeWithAutoRegion(async (client) => {
+      const command = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: S3_UPLOAD_PREFIX,
+        ContinuationToken: continuationToken,
+      });
+      return await client.send(command);
     });
-    return await client.send(command);
-  });
 
-  const contents: _Object[] = response.Contents || [];
+    if (response.Contents) {
+      contents.push(...response.Contents);
+    }
+    continuationToken = response.IsTruncated
+      ? response.NextContinuationToken
+      : undefined;
+  } while (continuationToken);
+
   const items: S3FileItem[] = [];
 
   for (const obj of contents) {
     if (!obj.Key || obj.Key.endsWith("/")) continue;
 
     const originalName = extractOriginalName(obj.Key);
-    const category = getFileCategory(originalName);
+    const contentType = getMimeTypeFromFilename(originalName);
+    const category = getFileCategory(originalName, contentType);
 
     items.push({
       key: obj.Key,
       originalName,
       size: obj.Size || 0,
       lastModified: obj.LastModified?.toISOString() || new Date().toISOString(),
-      contentType: getMimeTypeFromFilename(originalName),
+      contentType,
       category,
       eTag: obj.ETag?.replace(/"/g, ""),
     });
@@ -256,30 +422,65 @@ export async function listS3Files(): Promise<S3FileItem[]> {
 }
 
 /**
+ * Read user-defined S3 metadata for a specific object via HeadObject.
+ */
+export async function getS3ObjectMetadata(
+  key: string
+): Promise<S3ObjectMeta | null> {
+  const bucket = getBucketName();
+  try {
+    const head = await executeWithAutoRegion(async (client) => {
+      return await client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: key })
+      );
+    });
+    const meta = head.Metadata || {};
+    return {
+      originalName: safeDecodeURIComponent(meta["original-name"]),
+      uploadedBy: safeDecodeURIComponent(meta["uploaded-by"]),
+      category: meta["category"],
+      contentType: head.ContentType,
+      uploadedAt: meta["uploaded-at"],
+      eTag: head.ETag?.replace(/"/g, ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Upload a file directly to Amazon S3 with metadata.
  */
 export async function uploadToS3(params: {
   buffer: Buffer;
   originalFileName: string;
   contentType: string;
-  uploadedBy?: string;
+  uploadedBy: string;
 }): Promise<S3FileItem> {
   const bucket = getBucketName();
   const { key } = generateObjectKey(params.originalFileName);
-  const category = getFileCategory(params.originalFileName, params.contentType);
-  const uploader = (params.uploadedBy || "Aditya").trim();
+  const resolvedContentType =
+    params.contentType && params.contentType !== "application/octet-stream"
+      ? params.contentType
+      : getMimeTypeFromFilename(params.originalFileName);
+  const category = getFileCategory(
+    params.originalFileName,
+    resolvedContentType
+  );
+  const uploader = params.uploadedBy.trim();
+  const uploadedAt = new Date().toISOString();
 
-  await executeWithAutoRegion(async (client) => {
+  const putResult = await executeWithAutoRegion(async (client) => {
     const command = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       Body: params.buffer,
-      ContentType: params.contentType || "application/octet-stream",
+      ContentType: resolvedContentType,
       Metadata: {
         "original-name": encodeURIComponent(params.originalFileName),
-        "category": category,
+        category,
         "uploaded-by": encodeURIComponent(uploader),
-        "uploaded-at": new Date().toISOString(),
+        "uploaded-at": uploadedAt,
       },
     });
     return await client.send(command);
@@ -289,9 +490,10 @@ export async function uploadToS3(params: {
     key,
     originalName: params.originalFileName,
     size: params.buffer.length,
-    lastModified: new Date().toISOString(),
-    contentType: params.contentType,
+    lastModified: uploadedAt,
+    contentType: resolvedContentType,
     category,
+    eTag: putResult.ETag?.replace(/"/g, ""),
     uploadedBy: uploader,
   };
 }
@@ -303,23 +505,27 @@ export async function getPresignedFileUrl(
   key: string,
   disposition: "inline" | "attachment" = "attachment",
   originalFilename?: string,
-  expiresInSeconds: number = 900 // 15 minutes default
+  expiresInSeconds: number = PRESIGNED_URL_EXPIRY_SECONDS
 ): Promise<string> {
+  await ensureBucketRegionResolved();
   const bucket = getBucketName();
   const filename = originalFilename || extractOriginalName(key);
-  const contentDisposition =
-    disposition === "attachment"
-      ? `attachment; filename="${encodeURIComponent(filename)}"`
-      : `inline; filename="${encodeURIComponent(filename)}"`;
+  const contentDisposition = buildContentDisposition(disposition, filename);
+  const deducedMime =
+    disposition === "inline" ? getMimeTypeFromFilename(filename) : undefined;
+  const responseContentType =
+    deducedMime && isSafeInlinePreviewMime(deducedMime)
+      ? deducedMime
+      : undefined;
 
-  return await executeWithAutoRegion(async (client) => {
-    const command = new GetObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ResponseContentDisposition: contentDisposition,
-    });
-    return await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+  const client = getS3Client();
+  const command = new GetObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ResponseContentDisposition: contentDisposition,
+    ...(responseContentType ? { ResponseContentType: responseContentType } : {}),
   });
+  return await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 }
 
 /**
@@ -335,6 +541,54 @@ export async function getS3ObjectStream(key: string) {
     });
     return await client.send(command);
   });
+}
+
+/**
+ * Fetch up to `maxBytes` of a UTF-8 text/code object from S3 for safe inline preview.
+ */
+export async function getS3ObjectTextPreview(
+  key: string,
+  maxBytes: number = 512 * 1024
+): Promise<{ content: string; truncated: boolean; totalSize?: number }> {
+  const bucket = getBucketName();
+
+  let response;
+  try {
+    response = await executeWithAutoRegion(async (client) => {
+      const command = new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Range: `bytes=0-${maxBytes - 1}`,
+      });
+      return await client.send(command);
+    });
+  } catch (error: unknown) {
+    const err = error as {
+      name?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    if (err.name === "InvalidRange" || err.$metadata?.httpStatusCode === 416) {
+      return { content: "", truncated: false, totalSize: 0 };
+    }
+    throw error;
+  }
+
+  const content = (await response.Body?.transformToString("utf-8")) || "";
+  let totalSize: number | undefined;
+  let truncated = false;
+
+  if (response.ContentRange) {
+    const match = response.ContentRange.match(/\/(\d+)$/);
+    if (match && match[1]) {
+      totalSize = Number(match[1]);
+      truncated = totalSize > maxBytes;
+    }
+  } else if (typeof response.ContentLength === "number") {
+    totalSize = response.ContentLength;
+    truncated = response.ContentLength >= maxBytes;
+  }
+
+  return { content, truncated, totalSize };
 }
 
 /**
@@ -355,10 +609,10 @@ export async function deleteS3File(key: string): Promise<boolean> {
 }
 
 /**
- * Helper to deduce MIME types
+ * Helper to deduce MIME types from filename extension.
  */
-function getMimeTypeFromFilename(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase();
+export function getMimeTypeFromFilename(filename: string): string {
+  const ext = getFileExtension(filename);
   const map: Record<string, string> = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
@@ -366,13 +620,58 @@ function getMimeTypeFromFilename(filename: string): string {
     gif: "image/gif",
     webp: "image/webp",
     svg: "image/svg+xml",
+    ico: "image/x-icon",
+    bmp: "image/bmp",
+    tiff: "image/tiff",
+    avif: "image/avif",
     pdf: "application/pdf",
-    txt: "text/plain",
-    json: "application/json",
-    csv: "text/csv",
+    txt: "text/plain; charset=utf-8",
+    log: "text/plain; charset=utf-8",
+    md: "text/markdown; charset=utf-8",
+    csv: "text/csv; charset=utf-8",
+    rtf: "application/rtf",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    json: "application/json; charset=utf-8",
+    xml: "application/xml; charset=utf-8",
+    html: "text/html; charset=utf-8",
+    css: "text/css; charset=utf-8",
+    js: "application/javascript; charset=utf-8",
+    jsx: "text/javascript; charset=utf-8",
+    ts: "text/typescript; charset=utf-8",
+    tsx: "text/typescript; charset=utf-8",
+    py: "text/x-python; charset=utf-8",
+    java: "text/x-java-source; charset=utf-8",
+    c: "text/x-c; charset=utf-8",
+    cpp: "text/x-c++; charset=utf-8",
+    go: "text/x-go; charset=utf-8",
+    rs: "text/rust; charset=utf-8",
+    sql: "application/sql; charset=utf-8",
+    sh: "application/x-sh; charset=utf-8",
+    yaml: "application/x-yaml; charset=utf-8",
+    yml: "application/x-yaml; charset=utf-8",
     zip: "application/zip",
+    rar: "application/vnd.rar",
+    "7z": "application/x-7z-compressed",
+    tar: "application/x-tar",
+    gz: "application/gzip",
+    bz2: "application/x-bzip2",
+    xz: "application/x-xz",
     mp4: "video/mp4",
+    webm: "video/webm",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    mov: "video/quicktime",
     mp3: "audio/mpeg",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    flac: "audio/flac",
+    aac: "audio/aac",
+    m4a: "audio/mp4",
   };
-  return map[ext || ""] || "application/octet-stream";
+  return map[ext] || "application/octet-stream";
 }

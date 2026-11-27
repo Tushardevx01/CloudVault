@@ -8,8 +8,7 @@ import {
   LayoutGrid,
   List,
   Clock,
-  Sparkles,
-  Upload,
+  RefreshCw,
 } from "lucide-react";
 import {
   Sidebar,
@@ -28,6 +27,7 @@ import {
   SystemHealthSection,
 } from "@/components";
 import { FILE_CATEGORIES } from "@/lib/constants";
+import { downloadCloudFile } from "@/lib/clientDownload";
 import { S3FileItem, StorageStats, FileCategory } from "@/types/file";
 
 export default function UserDashboard() {
@@ -35,7 +35,8 @@ export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // User state
+  // User auth state
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [currentUser, setCurrentUser] = useState<{
     username: string;
     email: string;
@@ -45,12 +46,23 @@ export default function UserDashboard() {
   // Data states
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [files, setFiles] = useState<S3FileItem[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connected" | "disconnected" | "checking"
+  >("checking");
+  const [connectionMessage, setConnectionMessage] = useState<string | undefined>(
+    undefined
+  );
+  const [databaseConnected, setDatabaseConnected] = useState<boolean | null>(
+    null
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Filters and Sorting
   const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<FileCategory | "all">("all");
+  const [categoryFilter, setCategoryFilter] = useState<FileCategory | "all">(
+    "all"
+  );
   const [sortBy, setSortBy] = useState<"date" | "name" | "size">("date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
@@ -58,13 +70,19 @@ export default function UserDashboard() {
   // Modals state
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<S3FileItem | null>(null);
-  const [deleteTargetFile, setDeleteTargetFile] = useState<S3FileItem | null>(null);
+  const [deleteTargetFile, setDeleteTargetFile] = useState<S3FileItem | null>(
+    null
+  );
 
   // Toasts
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = useCallback(
-    (toast: { type: "success" | "error" | "info"; title: string; message?: string }) => {
+    (toast: {
+      type: "success" | "error" | "info";
+      title: string;
+      message?: string;
+    }) => {
       const id = `${Date.now()}-${Math.random()}`;
       setToasts((prev) => [...prev, { id, ...toast }]);
     },
@@ -75,79 +93,125 @@ export default function UserDashboard() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Check authentication
-  const checkAuth = useCallback(async () => {
-    try {
-      const res = await fetch("/api/auth/me");
-      const data = await res.json();
-      if (data.authenticated && data.user) {
-        setCurrentUser(data.user);
-        if (typeof window !== "undefined") {
-          localStorage.setItem("cloudvault_user", JSON.stringify(data.user));
-          localStorage.setItem("cloudvault_uploader_name", data.user.name || data.user.username);
-        }
-      } else if (typeof window !== "undefined") {
-        const saved = localStorage.getItem("cloudvault_user");
-        if (saved) {
-          try {
-            setCurrentUser(JSON.parse(saved));
-          } catch {
-            // ignore
-          }
-        }
-      }
-    } catch {
-      // ignore
+  const clearLocalSession = useCallback(() => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("cloudvault_user");
+      localStorage.removeItem("cloudvault_uploader_name");
     }
+    setCurrentUser(null);
   }, []);
 
-  // Fetch Stats & Files
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, filesRes] = await Promise.all([
+      const [statsRes, filesRes, healthRes] = await Promise.all([
         fetch("/api/stats"),
         fetch("/api/files"),
+        fetch("/api/health"),
       ]);
 
-      const statsData = await statsRes.json();
-      const filesData = await filesRes.json();
-
-      if (statsData.success && statsData.stats) {
-        setStats(statsData.stats);
+      if (statsRes.status === 401 || filesRes.status === 401) {
+        clearLocalSession();
+        router.replace("/");
+        return;
       }
 
-      if (filesData.success && filesData.files) {
+      const [statsData, filesData, healthData] = await Promise.all([
+        statsRes.json().catch(() => ({})),
+        filesRes.json().catch(() => ({})),
+        healthRes.json().catch(() => ({})),
+      ]);
+
+      if (statsData.stats) {
+        setStats(statsData.stats);
+      }
+      if (!statsRes.ok && statsData.error) {
+        addToast({
+          type: "error",
+          title: "Storage Metrics Warning",
+          message: statsData.error,
+        });
+      }
+
+      if (filesRes.ok && filesData.success && Array.isArray(filesData.files)) {
         setFiles(filesData.files);
+      } else if (!filesRes.ok && filesData.error) {
+        addToast({
+          type: "error",
+          title: "Could Not Load Files",
+          message: filesData.error,
+        });
+      }
+
+      setConnectionStatus(
+        healthData.connected ? "connected" : "disconnected"
+      );
+      setConnectionMessage(healthData.message);
+      if (typeof healthData.databaseConnected === "boolean") {
+        setDatabaseConnected(healthData.databaseConnected);
       }
     } catch (err) {
       console.error("Error fetching data:", err);
+      setConnectionStatus("disconnected");
+      addToast({
+        type: "error",
+        title: "Network Error",
+        message: "Failed to communicate with CloudVault backend services.",
+      });
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [addToast, clearLocalSession, router]);
 
-  // Initial load
+  // Enforce verified server session before loading dashboard
   useEffect(() => {
-    checkAuth();
-    fetchData();
-  }, [checkAuth, fetchData]);
+    let active = true;
 
-  // Handle Logout
+    async function verifyAndLoad() {
+      try {
+        const res = await fetch("/api/auth/me");
+        const data = await res.json();
+
+        if (!active) return;
+
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("cloudvault_user", JSON.stringify(data.user));
+            localStorage.setItem(
+              "cloudvault_uploader_name",
+              data.user.name || data.user.username
+            );
+          }
+          setIsCheckingAuth(false);
+          await fetchData();
+        } else {
+          clearLocalSession();
+          router.replace("/");
+        }
+      } catch {
+        if (!active) return;
+        clearLocalSession();
+        router.replace("/");
+      }
+    }
+
+    verifyAndLoad();
+    return () => {
+      active = false;
+    };
+  }, [clearLocalSession, fetchData, router]);
+
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {
       // ignore
     }
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("cloudvault_user");
-    }
-    setCurrentUser(null);
+    clearLocalSession();
     router.push("/");
   };
 
-  // Handle Refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchData();
@@ -158,11 +222,9 @@ export default function UserDashboard() {
     });
   };
 
-  // Filtered and Sorted Files
   const processedFiles = useMemo(() => {
     let result = [...files];
 
-    // Search filter
     if (searchTerm.trim()) {
       const lower = searchTerm.toLowerCase().trim();
       result = result.filter(
@@ -172,12 +234,10 @@ export default function UserDashboard() {
       );
     }
 
-    // Category filter
     if (categoryFilter !== "all") {
       result = result.filter((f) => f.category === categoryFilter);
     }
 
-    // Sorting
     result.sort((a, b) => {
       let cmp = 0;
       if (sortBy === "name") {
@@ -186,7 +246,8 @@ export default function UserDashboard() {
         cmp = a.size - b.size;
       } else {
         cmp =
-          new Date(a.lastModified).getTime() - new Date(b.lastModified).getTime();
+          new Date(a.lastModified).getTime() -
+          new Date(b.lastModified).getTime();
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
@@ -194,32 +255,43 @@ export default function UserDashboard() {
     return result;
   }, [files, searchTerm, categoryFilter, sortBy, sortOrder]);
 
-  // File Actions
-  const handleDownload = (file: S3FileItem) => {
-    const downloadUrl = `/api/files/download?key=${encodeURIComponent(
-      file.key
-    )}&name=${encodeURIComponent(file.originalName)}`;
-    const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = file.originalName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownload = async (file: S3FileItem) => {
+    const result = await downloadCloudFile(file);
+    if (result.ok) {
+      addToast({
+        type: "info",
+        title: "Download Initiated",
+        message: `Fetching "${file.originalName}" from cloud storage.`,
+      });
+      return;
+    }
+
+    if (result.status === 401) {
+      clearLocalSession();
+      router.replace("/");
+      return;
+    }
 
     addToast({
-      type: "info",
-      title: "Download Initiated",
-      message: `Fetching "${file.originalName}" from cloud storage.`,
+      type: "error",
+      title: "Download Failed",
+      message: result.error,
     });
   };
 
-  const handleDeleteConfirm = async (file: S3FileItem) => {
+  const handleDeleteConfirm = async (file: S3FileItem): Promise<boolean> => {
     try {
       const res = await fetch(
         `/api/files?key=${encodeURIComponent(file.key)}`,
         { method: "DELETE" }
       );
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        clearLocalSession();
+        router.replace("/");
+        return true;
+      }
 
       if (res.ok && data.success) {
         addToast({
@@ -228,33 +300,46 @@ export default function UserDashboard() {
           message: `"${file.originalName}" permanently removed from your vault.`,
         });
         await fetchData();
-      } else {
-        addToast({
-          type: "error",
-          title: "Deletion Failed",
-          message: data.error || "Could not delete file from cloud storage.",
-        });
+        return true;
       }
+
+      addToast({
+        type: "error",
+        title: "Deletion Failed",
+        message: data.error || "Could not delete file from cloud storage.",
+      });
+      return false;
     } catch {
       addToast({
         type: "error",
         title: "Network Error",
         message: "Failed to connect to delete endpoint.",
       });
+      return false;
     }
   };
+
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-reference-canvas bg-grid-mesh flex items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 text-[#718096] bg-white/80 backdrop-blur-xl px-8 py-6 rounded-3xl border border-white shadow-lg">
+          <RefreshCw className="w-7 h-7 animate-spin text-[#78BCE8]" />
+          <p className="text-xs font-semibold text-[#29343D]">
+            Verifying your CloudVault session...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       className="min-h-screen bg-reference-canvas bg-grid-mesh p-3 sm:p-5 lg:p-7 flex items-center justify-center font-sans antialiased"
       suppressHydrationWarning
     >
-      {/* Toast System */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Floating Main Glass Container matching Reference Image */}
       <div className="w-full max-w-[1600px] bg-white/70 backdrop-blur-2xl rounded-[36px] border border-white/80 shadow-[0_20px_60px_-15px_rgba(32,50,90,0.07)] p-4 sm:p-6 lg:p-7 flex flex-col lg:flex-row gap-6 min-h-[92vh]">
-        {/* Sidebar Navigation */}
         <Sidebar
           activeTab={activeTab}
           onSelectTab={setActiveTab}
@@ -266,9 +351,7 @@ export default function UserDashboard() {
           onLogout={handleLogout}
         />
 
-        {/* Main Content Area */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Navbar */}
           <Navbar
             activeTab={activeTab}
             onToggleSidebar={() => setSidebarOpen(true)}
@@ -276,18 +359,21 @@ export default function UserDashboard() {
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing}
             searchTerm={searchTerm}
-            onSearchChange={setSearchTerm}
+            onSearchChange={(val) => {
+              setSearchTerm(val);
+              if (val.trim() && activeTab !== "files") {
+                setActiveTab("files");
+              }
+            }}
             region={stats?.region || "ap-south-1"}
+            connectionStatus={connectionStatus}
             currentUser={currentUser}
             onLogout={handleLogout}
           />
 
-          {/* Content View Container */}
           <main className="flex-1 w-full space-y-6">
-            {/* TAB 1: DASHBOARD */}
             {activeTab === "dashboard" && (
               <div className="space-y-6">
-                {/* Stat Cards matching Reference Image */}
                 <StatsCards
                   stats={stats}
                   isLoading={isLoading}
@@ -297,16 +383,15 @@ export default function UserDashboard() {
                   onViewSecurity={() => setActiveTab("system")}
                 />
 
-                {/* Storage Breakdown with Pill Bar Chart & Donut Gauge */}
                 <StorageBreakdown
                   stats={stats}
                   onFilterCategory={(cat) => {
                     setCategoryFilter(cat);
                     setActiveTab("files");
                   }}
+                  onViewAllFiles={() => setActiveTab("files")}
                 />
 
-                {/* Recent Uploads Section matching Reference Image Bottom Rows */}
                 <div className="space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
@@ -319,7 +404,6 @@ export default function UserDashboard() {
                     </div>
 
                     <div className="flex items-center gap-2.5">
-                      {/* View Switch: List / Grid */}
                       <div className="flex items-center bg-white/90 backdrop-blur-md border border-white rounded-full p-1 shadow-[0_2px_12px_rgba(150,175,205,0.08)]">
                         <button
                           onClick={() => setViewMode("table")}
@@ -366,7 +450,14 @@ export default function UserDashboard() {
                       onDownload={handleDownload}
                       onDelete={(f) => setDeleteTargetFile(f)}
                       onOpenUpload={() => setIsUploadOpen(true)}
-                      currentUsername={currentUser?.username || currentUser?.name}
+                      currentUsername={
+                        currentUser?.username || currentUser?.name
+                      }
+                      currentUserAliases={
+                        currentUser
+                          ? [currentUser.username, currentUser.name]
+                          : []
+                      }
                     />
                   ) : (
                     <FileGrid
@@ -376,19 +467,23 @@ export default function UserDashboard() {
                       onDownload={handleDownload}
                       onDelete={(f) => setDeleteTargetFile(f)}
                       onOpenUpload={() => setIsUploadOpen(true)}
-                      currentUsername={currentUser?.username || currentUser?.name}
+                      currentUsername={
+                        currentUser?.username || currentUser?.name
+                      }
+                      currentUserAliases={
+                        currentUser
+                          ? [currentUser.username, currentUser.name]
+                          : []
+                      }
                     />
                   )}
                 </div>
               </div>
             )}
 
-            {/* TAB 2: ALL FILES */}
             {activeTab === "files" && (
               <div className="space-y-4">
-                {/* Filter & Search Toolbar */}
                 <div className="p-4 rounded-3xl bg-white/90 backdrop-blur-md border border-white shadow-[0_4px_20px_rgba(150,175,205,0.08)] space-y-3">
-                  {/* Search & Actions Row */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                     <div className="relative flex-1">
                       <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7A8792]" />
@@ -402,13 +497,14 @@ export default function UserDashboard() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {/* Sort Dropdown */}
                       <div className="flex items-center bg-[#F6F9FC] border border-[#E3EAF0] rounded-full px-3 py-1.5 text-xs text-[#29343D]">
                         <ArrowUpDown className="w-3.5 h-3.5 text-[#7A8792] mr-1.5" />
                         <select
                           value={sortBy}
                           onChange={(e) =>
-                            setSortBy(e.target.value as "date" | "name" | "size")
+                            setSortBy(
+                              e.target.value as "date" | "name" | "size"
+                            )
                           }
                           className="bg-transparent text-[#29343D] focus:outline-none cursor-pointer text-xs"
                         >
@@ -429,7 +525,6 @@ export default function UserDashboard() {
                         </button>
                       </div>
 
-                      {/* View Switch: List / Grid */}
                       <div className="flex items-center bg-[#F6F9FC] border border-[#E3EAF0] rounded-full p-1 shadow-2xs">
                         <button
                           onClick={() => setViewMode("table")}
@@ -459,7 +554,6 @@ export default function UserDashboard() {
                     </div>
                   </div>
 
-                  {/* Category Pills */}
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1">
                     {FILE_CATEGORIES.map((cat) => {
                       const isSelected = categoryFilter === cat.id;
@@ -480,7 +574,6 @@ export default function UserDashboard() {
                   </div>
                 </div>
 
-                {/* Results Summary */}
                 <div className="flex items-center justify-between text-xs text-[#7A8792] px-1">
                   <span>
                     Showing {processedFiles.length} of {files.length} file(s)
@@ -498,7 +591,6 @@ export default function UserDashboard() {
                   )}
                 </div>
 
-                {/* View Rendering */}
                 {viewMode === "table" ? (
                   <FileList
                     files={processedFiles}
@@ -507,7 +599,14 @@ export default function UserDashboard() {
                     onDownload={handleDownload}
                     onDelete={(f) => setDeleteTargetFile(f)}
                     onOpenUpload={() => setIsUploadOpen(true)}
-                    currentUsername={currentUser?.username || currentUser?.name}
+                    currentUsername={
+                      currentUser?.username || currentUser?.name
+                    }
+                    currentUserAliases={
+                      currentUser
+                        ? [currentUser.username, currentUser.name]
+                        : []
+                    }
                   />
                 ) : (
                   <FileGrid
@@ -517,25 +616,27 @@ export default function UserDashboard() {
                     onDownload={handleDownload}
                     onDelete={(f) => setDeleteTargetFile(f)}
                     onOpenUpload={() => setIsUploadOpen(true)}
-                    currentUsername={currentUser?.username || currentUser?.name}
+                    currentUsername={
+                      currentUser?.username || currentUser?.name
+                    }
+                    currentUserAliases={
+                      currentUser
+                        ? [currentUser.username, currentUser.name]
+                        : []
+                    }
                   />
                 )}
               </div>
             )}
 
-            {/* TAB 3: CLOUD CONCEPTS & ARCHITECTURE */}
             {activeTab === "cloud-concepts" && <CloudVsLocalSection />}
 
-            {/* TAB 4: SYSTEM & HEALTH */}
             {activeTab === "system" && (
               <SystemHealthSection
                 stats={stats}
-                connectionStatus={stats?.storageHealth === "connected" ? "connected" : "checking"}
-                connectionMessage={
-                  stats?.storageHealth === "connected"
-                    ? `Successfully authenticated to Amazon S3 bucket "${stats?.bucketName}" in region ${stats?.region}.`
-                    : undefined
-                }
+                connectionStatus={connectionStatus}
+                connectionMessage={connectionMessage}
+                databaseConnected={databaseConnected}
                 onCheckHealth={fetchData}
               />
             )}
@@ -543,7 +644,6 @@ export default function UserDashboard() {
         </div>
       </div>
 
-      {/* Upload Modal */}
       <UploadModal
         isOpen={isUploadOpen}
         onClose={() => setIsUploadOpen(false)}
@@ -552,7 +652,6 @@ export default function UserDashboard() {
         currentUsername={currentUser?.name || currentUser?.username}
       />
 
-      {/* File Preview Modal */}
       <FilePreviewModal
         file={previewFile}
         isOpen={Boolean(previewFile)}
@@ -560,7 +659,6 @@ export default function UserDashboard() {
         onDownload={handleDownload}
       />
 
-      {/* Delete Confirmation Modal */}
       <DeleteConfirmModal
         file={deleteTargetFile}
         isOpen={Boolean(deleteTargetFile)}

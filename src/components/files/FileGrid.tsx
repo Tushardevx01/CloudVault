@@ -1,10 +1,15 @@
 "use client";
 
 import React from "react";
-import { Eye, Download, Trash2, Calendar, HardDrive, FileQuestion } from "lucide-react";
+import { Eye, Download, Trash2, FileQuestion } from "lucide-react";
 import { S3FileItem } from "@/types/file";
 import { FileIcon } from "./FileIcon";
-import { formatBytes, formatRelativeTime } from "@/lib/utils";
+import {
+  formatBytes,
+  formatRelativeTime,
+  isFileOwnedByUser,
+  isFilePreviewable,
+} from "@/lib/utils";
 
 interface FileGridProps {
   files: S3FileItem[];
@@ -14,6 +19,7 @@ interface FileGridProps {
   onDelete: (file: S3FileItem) => void;
   onOpenUpload?: () => void;
   currentUsername?: string;
+  currentUserAliases?: string[];
   isAdmin?: boolean;
 }
 
@@ -25,6 +31,7 @@ export function FileGrid({
   onDelete,
   onOpenUpload,
   currentUsername,
+  currentUserAliases = [],
   isAdmin = false,
 }: FileGridProps) {
   if (isLoading) {
@@ -77,15 +84,15 @@ export function FileGrid({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
       {files.map((file) => {
-        const isPreviewable =
-          file.category === "image" ||
-          file.originalName.toLowerCase().endsWith(".pdf") ||
-          file.category === "code";
+        const isPreviewable = isFilePreviewable(
+          file.originalName,
+          file.category
+        );
 
-        const isOwner = Boolean(
-          currentUsername &&
-          file.uploadedBy &&
-          file.uploadedBy.toLowerCase().trim() === currentUsername.toLowerCase().trim()
+        const isOwner = isFileOwnedByUser(
+          file.uploadedBy,
+          currentUsername,
+          ...currentUserAliases
         );
         const canDelete = isAdmin || isOwner;
 

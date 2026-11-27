@@ -2,16 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAdminCredentials } from "@/lib/mongodb";
 import {
   createAdminToken,
-  isAdminAuthenticated,
+  getAdminFromRequest,
   COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/adminAuth";
+import { isSecureRequest, readJsonObject } from "@/lib/token";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const username = (body.username || "admin").trim();
-    const password = body.password || "";
+    const body = await readJsonObject(request);
+    if (!body) {
+      return NextResponse.json(
+        { success: false, error: "Invalid JSON request body." },
+        { status: 400 }
+      );
+    }
+
+    const username =
+      typeof body.username === "string" && body.username.trim()
+        ? body.username.trim()
+        : "admin";
+    const password = typeof body.password === "string" ? body.password : "";
 
     if (!password) {
       return NextResponse.json(
@@ -26,24 +37,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: verification.error || "Authentication failed. Invalid password.",
+          error:
+            verification.error || "Authentication failed. Invalid password.",
         },
         { status: 401 }
       );
     }
 
-    const token = createAdminToken(verification.username || username);
+    const resolvedUsername = verification.username || username;
+    const token = await createAdminToken(resolvedUsername);
 
     const response = NextResponse.json({
       success: true,
       message: "Admin authentication successful.",
-      username: verification.username || username,
+      username: resolvedUsername,
       token,
     });
 
     response.cookies.set(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest(request),
       sameSite: "lax",
       maxAge: SESSION_MAX_AGE_SECONDS,
       path: "/",
@@ -61,14 +74,14 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const isAuth = isAdminAuthenticated(request);
+  const admin = await getAdminFromRequest(request);
   return NextResponse.json({
-    authenticated: isAuth,
-    username: isAuth ? "admin" : null,
+    authenticated: admin.authenticated,
+    username: admin.username,
   });
 }
 
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
   const response = NextResponse.json({
     success: true,
     message: "Admin logged out successfully.",
@@ -76,7 +89,7 @@ export async function DELETE() {
 
   response.cookies.set(COOKIE_NAME, "", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureRequest(request),
     sameSite: "lax",
     maxAge: 0,
     path: "/",
@@ -84,4 +97,3 @@ export async function DELETE() {
 
   return response;
 }
-
