@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Cloud,
   ArrowRight,
@@ -23,6 +24,7 @@ import {
 import { AuthModal } from "@/components/auth/AuthModal";
 
 export default function HomePage() {
+  const router = useRouter();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<"signin" | "signup" | "admin">("signup");
   const [currentUser, setCurrentUser] = useState<{
@@ -47,6 +49,10 @@ export default function HomePage() {
   }, []);
 
   const openAuth = (tab: "signin" | "signup" | "admin") => {
+    if (tab !== "admin" && currentUser) {
+      router.push("/dashboard");
+      return;
+    }
     setAuthModalTab(tab);
     setAuthModalOpen(true);
   };
@@ -137,8 +143,6 @@ export default function HomePage() {
       <main className="flex-1">
         {/* 2. HERO SECTION */}
         <section className="relative overflow-hidden pt-16 pb-20 sm:pt-24 sm:pb-28 bg-white border-b border-[#E3EAF0]">
-          <div className="absolute inset-0 bg-dot-pattern opacity-70 pointer-events-none" />
-
           <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             {/* Announcement Pill */}
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#DCEEFF] border border-[#B9DDF7] text-[#20628E] text-xs font-medium mb-6 shadow-2xs">
@@ -518,7 +522,7 @@ export default function HomePage() {
                   <span className="text-2xl font-bold font-mono text-[#263747]">99.99%</span>
                   <p className="text-[11px] text-[#718096] mt-1 font-medium">Uptime Reliability</p>
                 </div>
-                <div className="p-5 rounded-2xl bg-white border border-[#B7E4C7] bg-[#DDF3E4]/30 text-center shadow-2xs">
+                <div className="p-5 rounded-2xl bg-[#DDF3E4]/40 border border-[#B7E4C7] text-center shadow-2xs">
                   <span className="text-2xl font-bold font-mono text-[#1E633C]">15 min</span>
                   <p className="text-[11px] text-[#1E633C] mt-1 font-medium">Token Expiration</p>
                 </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBloomFilter } from "@/lib/bloomFilter";
+import { getBloomFilter, RESERVED_USERNAMES } from "@/lib/bloomFilter";
 import { getDb } from "@/lib/mongodb";
+import { escapeRegExp } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,14 +15,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Format validation
-    if (username.length < 3) {
+    if (username.length < 3 || username.length > 32) {
       return NextResponse.json({
         success: true,
         available: false,
         method: "validation",
         hitsDb: false,
-        message: "Username must be at least 3 characters",
+        message: "Username must be between 3 and 32 characters",
       });
     }
 
@@ -31,36 +31,50 @@ export async function GET(request: NextRequest) {
         available: false,
         method: "validation",
         hitsDb: false,
-        message: "Username can only contain letters, numbers, underscores, and dashes",
+        message:
+          "Username can only contain letters, numbers, dots, underscores, and dashes",
       });
     }
 
-    // STEP 1: Check in-memory Bloom Filter (Probabilistic Layer)
-    const bloom = await getBloomFilter();
-    const mightContain = bloom.mightContain(username);
+    if ((RESERVED_USERNAMES as readonly string[]).includes(username)) {
+      return NextResponse.json({
+        success: true,
+        username,
+        available: false,
+        method: "validation",
+        hitsDb: false,
+        message: "This username is reserved",
+      });
+    }
 
-    // If Bloom Filter says NO -> GUARANTEED NOT IN SET (0 DB READS!)
-    if (!mightContain) {
+    // STEP 1: Check in-memory Bloom Filter (only authoritative when warmed from MongoDB)
+    const bloom = await getBloomFilter();
+    const isWarm = bloom.getIsInitialized();
+    const mightContain = isWarm ? bloom.mightContain(username) : true;
+
+    if (isWarm && !mightContain) {
       return NextResponse.json({
         success: true,
         username,
         available: true,
         method: "bloom_filter",
         hitsDb: false,
-        message: "Username is available (guaranteed by Bloom Filter without querying database)",
+        message:
+          "Username is available (guaranteed by Bloom Filter without querying database)",
         filterStats: bloom.getStats(),
       });
     }
 
-    // STEP 2: Bloom Filter says YES -> Probably taken (or false positive).
-    // Verify against MongoDB to eliminate false positives.
+    // STEP 2: Bloom Filter says probably present (or filter is cold) -> verify against MongoDB.
     const db = await getDb();
     const usersCollection = db.collection("users");
+    const nameRegex = new RegExp(`^${escapeRegExp(username)}$`, "i");
     const existing = await usersCollection.findOne({
-      $or: [{ username }, { name: username }],
+      $or: [{ username }, { name: { $regex: nameRegex } }],
     });
 
     if (existing) {
+      bloom.add(username);
       return NextResponse.json({
         success: true,
         username,
@@ -72,24 +86,27 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Bloom Filter false positive, but MongoDB confirmed free
     return NextResponse.json({
       success: true,
       username,
       available: true,
       method: "database",
       hitsDb: true,
-      falsePositive: true,
-      message: "Username is available (verified by database after Bloom collision check)",
+      falsePositive: isWarm,
+      message: isWarm
+        ? "Username is available (verified by database after Bloom collision check)"
+        : "Username is available (verified directly against database)",
       filterStats: bloom.getStats(),
     });
   } catch (error: unknown) {
     const err = error as { message?: string };
     console.error("Username check error:", err);
     return NextResponse.json(
-      { success: false, error: err.message || "Failed to check username availability" },
+      {
+        success: false,
+        error: err.message || "Failed to check username availability",
+      },
       { status: 500 }
     );
   }
 }
-

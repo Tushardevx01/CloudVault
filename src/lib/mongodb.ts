@@ -1,95 +1,149 @@
-import { MongoClient, Db } from "mongodb";
 import bcrypt from "bcryptjs";
+import { Filter, Document } from "mongodb";
 import { CloudUser, S3FileItem } from "@/types/file";
-import { formatBytes } from "./utils";
+import { getDb, pingDatabase } from "./db";
+import { addUsernameToBloomIfWarm, invalidateBloomFilter } from "./bloomFilter";
+import { escapeRegExp, formatBytes, getFileCategory } from "./utils";
+import { getS3ObjectMetadata, listS3Files } from "./s3";
 
-const DB_NAME = "cloudvault";
+export { getDb, pingDatabase };
+
 const DEFAULT_ADMIN_USERNAME = "admin";
-const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "Adamas@2023";
+const SYNC_BATCH_SIZE = 5;
 
 declare global {
-  var _mongoClientPromise: Promise<MongoClient> | undefined;
+  var _mongoSyncPromise: Promise<void> | undefined;
 }
 
-let clientPromise: Promise<MongoClient> | undefined;
+function toIsoStringSafe(value: unknown, fallback?: Date): string {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return (fallback || new Date()).toISOString();
+}
 
-function connectClient(uri: string, onReset: () => void): Promise<MongoClient> {
-  const client = new MongoClient(uri);
-  return client.connect().catch((err) => {
-    onReset();
-    throw err;
+function getOptionalIsoString(value: unknown): string | undefined {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return undefined;
+}
+
+async function getUserAliases(userName: string): Promise<string[]> {
+  const clean = userName.trim();
+  if (!clean) return [];
+  const db = await getDb();
+  const cleanLower = clean.toLowerCase();
+  const nameRegex = new RegExp(`^${escapeRegExp(clean)}$`, "i");
+  const userDoc = await db.collection("users").findOne(
+    {
+      $or: [{ username: cleanLower }, { name: { $regex: nameRegex } }],
+    },
+    { projection: { username: 1, name: 1 } }
+  );
+
+  const aliases = new Set<string>([clean]);
+  if (typeof userDoc?.username === "string" && userDoc.username.trim()) {
+    aliases.add(userDoc.username.trim());
+  }
+  if (typeof userDoc?.name === "string" && userDoc.name.trim()) {
+    aliases.add(userDoc.name.trim());
+  }
+  return Array.from(aliases);
+}
+
+async function buildUserFilesFilter(userName: string): Promise<Filter<Document>> {
+  const clean = userName.trim();
+  if (!clean || clean.toLowerCase() === "unassigned") {
+    return {
+      $or: [
+        { uploadedBy: { $regex: /^unassigned$/i } },
+        { uploadedBy: null },
+        { uploadedBy: "" },
+        { uploadedBy: { $exists: false } },
+      ],
+    };
+  }
+
+  const aliases = await getUserAliases(clean);
+  const regexes = aliases.map(
+    (alias) => new RegExp(`^${escapeRegExp(alias)}$`, "i")
+  );
+  return regexes.length === 1
+    ? { uploadedBy: { $regex: regexes[0] } }
+    : { $or: regexes.map((r) => ({ uploadedBy: { $regex: r } })) };
+}
+
+/**
+ * Checks whether a file's owner matches a target user (by username, display name, or Unassigned).
+ */
+export async function isFileOwnedByTargetUser(
+  ownerName: string | undefined | null,
+  targetUserName: string
+): Promise<boolean> {
+  const cleanTarget = targetUserName.trim().toLowerCase();
+  const normalizedOwner = ownerName?.trim().toLowerCase() || "unassigned";
+  if (cleanTarget === "unassigned") {
+    return normalizedOwner === "unassigned";
+  }
+  const aliases = await getUserAliases(targetUserName);
+  return aliases.some((alias) => alias.toLowerCase() === normalizedOwner);
+}
+
+/**
+ * Seeds the default admin user if the admins collection does not have one yet.
+ * Never overwrites an existing admin's stored password hash.
+ */
+export async function ensureAdminUser(): Promise<{
+  username: string;
+  seeded: boolean;
+}> {
+  const db = await getDb();
+  const adminsCollection = db.collection("admins");
+
+  const existingAdmin = await adminsCollection.findOne({
+    username: DEFAULT_ADMIN_USERNAME,
   });
-}
 
-function getClientPromise(): Promise<MongoClient> {
-  const uri = process.env.MONGODB_URI?.trim();
-  if (!uri) {
+  if (existingAdmin) {
+    return { username: DEFAULT_ADMIN_USERNAME, seeded: false };
+  }
+
+  const configuredPassword = process.env.ADMIN_DEFAULT_PASSWORD?.trim();
+  if (!configuredPassword) {
     throw new Error(
-      "MONGODB_URI environment variable is not defined. Please configure it in .env."
+      "No admin account exists and ADMIN_DEFAULT_PASSWORD is not configured in .env."
     );
   }
 
-  if (process.env.NODE_ENV === "development") {
-    if (!global._mongoClientPromise) {
-      global._mongoClientPromise = connectClient(uri, () => {
-        global._mongoClientPromise = undefined;
-      });
-    }
-    return global._mongoClientPromise;
-  }
-
-  if (!clientPromise) {
-    clientPromise = connectClient(uri, () => {
-      clientPromise = undefined;
-    });
-  }
-  return clientPromise;
-}
-
-/**
- * Returns the MongoDB Database instance.
- */
-export async function getDb(): Promise<Db> {
-  const client = await getClientPromise();
-  return client.db(DB_NAME);
-}
-
-/**
- * Ensures the default Admin user is seeded and stored in MongoDB with the designated password.
- */
-export async function ensureAdminUser(): Promise<{ username: string; seeded: boolean }> {
+  const passwordHash = await bcrypt.hash(configuredPassword, 10);
   try {
-    const db = await getDb();
-    const adminsCollection = db.collection("admins");
-
-    const existingAdmin = await adminsCollection.findOne({ username: DEFAULT_ADMIN_USERNAME });
-
-    if (!existingAdmin) {
-      const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
-      await adminsCollection.insertOne({
-        username: DEFAULT_ADMIN_USERNAME,
-        passwordHash,
-        role: "admin",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      return { username: DEFAULT_ADMIN_USERNAME, seeded: true };
+    await adminsCollection.insertOne({
+      username: DEFAULT_ADMIN_USERNAME,
+      passwordHash,
+      role: "admin",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return { username: DEFAULT_ADMIN_USERNAME, seeded: true };
+  } catch (err: unknown) {
+    const mongoErr = err as { code?: number };
+    if (mongoErr.code === 11000) {
+      return { username: DEFAULT_ADMIN_USERNAME, seeded: false };
     }
-
-    // If existing admin password needs verification or update
-    const matches = await bcrypt.compare(DEFAULT_ADMIN_PASSWORD, existingAdmin.passwordHash);
-    if (!matches) {
-      const newHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
-      await adminsCollection.updateOne(
-        { username: DEFAULT_ADMIN_USERNAME },
-        { $set: { passwordHash: newHash, updatedAt: new Date() } }
-      );
-    }
-
-    return { username: DEFAULT_ADMIN_USERNAME, seeded: false };
-  } catch (error) {
-    console.error("Error ensuring admin user in MongoDB:", error);
-    throw error;
+    throw err;
   }
 }
 
@@ -99,14 +153,26 @@ export async function ensureAdminUser(): Promise<{ username: string; seeded: boo
 export async function verifyAdminCredentials(
   username: string,
   pass: string
-): Promise<{ success: boolean; username?: string; role?: string; error?: string }> {
+): Promise<{
+  success: boolean;
+  username?: string;
+  role?: string;
+  error?: string;
+}> {
   try {
     await ensureAdminUser();
     const db = await getDb();
     const adminsCollection = db.collection("admins");
 
+    const cleanUsername = username.trim();
+    if (!cleanUsername) {
+      return { success: false, error: "Invalid admin credentials." };
+    }
+
     const admin = await adminsCollection.findOne({
-      username: { $regex: new RegExp(`^${username.trim()}$`, "i") },
+      username: {
+        $regex: new RegExp(`^${escapeRegExp(cleanUsername)}$`, "i"),
+      },
     });
 
     if (!admin) {
@@ -118,7 +184,6 @@ export async function verifyAdminCredentials(
       return { success: false, error: "Invalid admin password." };
     }
 
-    // Update last login
     await adminsCollection.updateOne(
       { _id: admin._id },
       { $set: { lastLoginAt: new Date() } }
@@ -132,32 +197,37 @@ export async function verifyAdminCredentials(
   } catch (err: unknown) {
     const error = err as { message?: string };
     console.error("Admin verification error:", error);
-    return { success: false, error: error.message || "Database connection error." };
+    return {
+      success: false,
+      error: error.message || "Database connection error.",
+    };
   }
 }
 
 /**
  * Records a file upload in MongoDB and updates the corresponding user's stats.
  */
-export async function recordFileUpload(file: {
-  key: string;
-  originalName: string;
-  size: number;
-  contentType: string;
-  category: string;
-  uploadedBy: string;
-  uploadedAt?: Date;
-  eTag?: string;
-}): Promise<void> {
+export async function recordFileUpload(
+  file: {
+    key: string;
+    originalName: string;
+    size: number;
+    contentType: string;
+    category: string;
+    uploadedBy: string;
+    uploadedAt?: Date;
+    eTag?: string;
+  },
+  options?: { skipStatsRefresh?: boolean }
+): Promise<void> {
   try {
     const db = await getDb();
     const filesCollection = db.collection("files");
     const usersCollection = db.collection("users");
 
-    const userName = (file.uploadedBy || "Aditya").trim();
+    const userName = file.uploadedBy.trim() || "Unassigned";
     const uploadDate = file.uploadedAt || new Date();
 
-    // Upsert file record
     await filesCollection.updateOne(
       { key: file.key },
       {
@@ -169,33 +239,56 @@ export async function recordFileUpload(file: {
           category: file.category,
           uploadedBy: userName,
           uploadedAt: uploadDate,
-          eTag: file.eTag,
+          ...(file.eTag ? { eTag: file.eTag } : {}),
           updatedAt: new Date(),
         },
       },
       { upsert: true }
     );
 
-    // Upsert / update user
-    await usersCollection.updateOne(
-      { name: userName },
-      {
-        $setOnInsert: {
-          name: userName,
-          createdAt: uploadDate,
-          firstUploadAt: uploadDate,
-        },
-        $set: {
-          lastActiveAt: uploadDate,
-        },
-      },
-      { upsert: true }
-    );
+    if (userName !== "Unassigned" && userName.toLowerCase() !== "admin") {
+      const lowerUsername = userName.toLowerCase();
+      const nameRegex = new RegExp(`^${escapeRegExp(userName)}$`, "i");
+      const existingUser = await usersCollection.findOne({
+        $or: [{ username: lowerUsername }, { name: { $regex: nameRegex } }],
+      });
 
-    // Refresh user's actual aggregates from files collection
-    await refreshUserStats(userName);
+      if (existingUser) {
+        await usersCollection.updateOne(
+          { _id: existingUser._id },
+          { $set: { lastActiveAt: uploadDate } }
+        );
+      } else {
+        try {
+          await usersCollection.updateOne(
+            { username: lowerUsername },
+            {
+              $set: { lastActiveAt: uploadDate },
+              $setOnInsert: {
+                username: lowerUsername,
+                name: userName,
+                createdAt: uploadDate,
+                firstUploadAt: uploadDate,
+                objectCount: 0,
+                totalSizeBytes: 0,
+              },
+            },
+            { upsert: true }
+          );
+          addUsernameToBloomIfWarm(lowerUsername);
+        } catch (upsertErr: unknown) {
+          const mongoErr = upsertErr as { code?: number };
+          if (mongoErr.code !== 11000) throw upsertErr;
+        }
+      }
+
+      if (!options?.skipStatsRefresh) {
+        await refreshUserStats(userName);
+      }
+    }
   } catch (error) {
     console.error("Error recording file upload in MongoDB:", error);
+    throw error;
   }
 }
 
@@ -204,16 +297,22 @@ export async function recordFileUpload(file: {
  */
 export async function refreshUserStats(userName: string): Promise<void> {
   try {
+    const clean = userName.trim();
+    if (!clean || clean.toLowerCase() === "unassigned" || clean.toLowerCase() === "admin") {
+      return;
+    }
+
     const db = await getDb();
     const filesCollection = db.collection("files");
     const usersCollection = db.collection("users");
+    const fileFilter = await buildUserFilesFilter(clean);
 
     const stats = await filesCollection
       .aggregate([
-        { $match: { uploadedBy: userName } },
+        { $match: fileFilter },
         {
           $group: {
-            _id: "$uploadedBy",
+            _id: null,
             objectCount: { $sum: 1 },
             totalSizeBytes: { $sum: "$size" },
             lastActiveAt: { $max: "$uploadedAt" },
@@ -222,28 +321,30 @@ export async function refreshUserStats(userName: string): Promise<void> {
       ])
       .toArray();
 
+    const userRegex = new RegExp(`^${escapeRegExp(clean)}$`, "i");
+    const userFilter = {
+      $or: [
+        { username: clean.toLowerCase() },
+        { name: { $regex: userRegex } },
+      ],
+    };
+
     if (stats.length > 0) {
       const agg = stats[0];
-      await usersCollection.updateOne(
-        { name: userName },
-        {
-          $set: {
-            objectCount: agg.objectCount,
-            totalSizeBytes: agg.totalSizeBytes,
-            lastActiveAt: agg.lastActiveAt,
-          },
-        }
-      );
+      await usersCollection.updateMany(userFilter, {
+        $set: {
+          objectCount: agg.objectCount,
+          totalSizeBytes: agg.totalSizeBytes,
+          lastActiveAt: agg.lastActiveAt,
+        },
+      });
     } else {
-      await usersCollection.updateOne(
-        { name: userName },
-        {
-          $set: {
-            objectCount: 0,
-            totalSizeBytes: 0,
-          },
-        }
-      );
+      await usersCollection.updateMany(userFilter, {
+        $set: {
+          objectCount: 0,
+          totalSizeBytes: 0,
+        },
+      });
     }
   } catch (error) {
     console.error(`Error refreshing user stats for ${userName}:`, error);
@@ -259,12 +360,25 @@ export async function getAllUsersWithStats(): Promise<CloudUser[]> {
     const usersCollection = db.collection("users");
     const filesCollection = db.collection("files");
 
-    // Aggregate directly from files to guarantee 100% synchronization
     const fileAggregates = await filesCollection
       .aggregate([
         {
           $group: {
-            _id: "$uploadedBy",
+            _id: {
+              $let: {
+                vars: {
+                  raw: { $trim: { input: { $ifNull: ["$uploadedBy", ""] } } },
+                },
+                in: {
+                  $cond: [
+                    { $eq: ["$$raw", ""] },
+                    "unassigned",
+                    { $toLower: "$$raw" },
+                  ],
+                },
+              },
+            },
+            displayName: { $first: "$uploadedBy" },
             objectCount: { $sum: 1 },
             totalSizeBytes: { $sum: "$size" },
             lastActiveAt: { $max: "$uploadedAt" },
@@ -275,69 +389,127 @@ export async function getAllUsersWithStats(): Promise<CloudUser[]> {
       .toArray();
 
     const existingUsers = await usersCollection.find({}).toArray();
-    const userMap = new Map<string, (typeof existingUsers)[0]>();
+    const userByKey = new Map<string, (typeof existingUsers)[0]>();
 
-    existingUsers.forEach((u) => {
-      userMap.set(u.name, u);
-    });
+    for (const u of existingUsers) {
+      if (typeof u.username === "string" && u.username.trim()) {
+        userByKey.set(u.username.trim().toLowerCase(), u);
+      }
+      if (typeof u.name === "string" && u.name.trim()) {
+        userByKey.set(u.name.trim().toLowerCase(), u);
+      }
+    }
+
+    const groupedByUserId = new Map<
+      string,
+      {
+        user: (typeof existingUsers)[0] | undefined;
+        name: string;
+        objectCount: number;
+        totalSizeBytes: number;
+        firstUploadAt?: Date;
+        lastActiveAt?: Date;
+      }
+    >();
+    const seenUserIds = new Set<string>();
+
+    for (const agg of fileAggregates) {
+      const lookupKey = String(agg._id || "unassigned").toLowerCase();
+      const u = userByKey.get(lookupKey);
+      const bucketId = u ? u._id.toString() : `virtual:${lookupKey}`;
+      if (u) {
+        seenUserIds.add(u._id.toString());
+      }
+
+      const existingEntry = groupedByUserId.get(bucketId);
+      const aggFirst = agg.firstUploadAt ? new Date(agg.firstUploadAt) : undefined;
+      const aggLast = agg.lastActiveAt ? new Date(agg.lastActiveAt) : undefined;
+
+      if (existingEntry) {
+        existingEntry.objectCount += agg.objectCount || 0;
+        existingEntry.totalSizeBytes += agg.totalSizeBytes || 0;
+        if (
+          aggFirst &&
+          (!existingEntry.firstUploadAt || aggFirst < existingEntry.firstUploadAt)
+        ) {
+          existingEntry.firstUploadAt = aggFirst;
+        }
+        if (
+          aggLast &&
+          (!existingEntry.lastActiveAt || aggLast > existingEntry.lastActiveAt)
+        ) {
+          existingEntry.lastActiveAt = aggLast;
+        }
+      } else {
+        const displayName =
+          lookupKey === "unassigned"
+            ? "Unassigned"
+            : u?.username || u?.name || agg.displayName || "Unassigned";
+        groupedByUserId.set(bucketId, {
+          user: u,
+          name: displayName,
+          objectCount: agg.objectCount || 0,
+          totalSizeBytes: agg.totalSizeBytes || 0,
+          firstUploadAt: aggFirst,
+          lastActiveAt: aggLast,
+        });
+      }
+    }
 
     const results: CloudUser[] = [];
 
-    // Combine aggregates
-    for (const agg of fileAggregates) {
-      const name = agg._id || "Anonymous";
-      const u = userMap.get(name);
-
+    for (const entry of groupedByUserId.values()) {
+      const u = entry.user;
       results.push({
         id: u?._id?.toString(),
-        name,
+        name: entry.name,
         email: u?.email,
-        objectCount: agg.objectCount || 0,
-        totalSizeBytes: agg.totalSizeBytes || 0,
-        totalSizeFormatted: formatBytes(agg.totalSizeBytes || 0),
-        firstUploadAt: (agg.firstUploadAt || u?.createdAt || new Date()).toISOString(),
-        lastActiveAt: (agg.lastActiveAt || u?.lastActiveAt || new Date()).toISOString(),
-        createdAt: (u?.createdAt || agg.firstUploadAt || new Date()).toISOString(),
+        objectCount: entry.objectCount,
+        totalSizeBytes: entry.totalSizeBytes,
+        totalSizeFormatted: formatBytes(entry.totalSizeBytes),
+        firstUploadAt: toIsoStringSafe(entry.firstUploadAt || u?.createdAt),
+        lastActiveAt: toIsoStringSafe(entry.lastActiveAt || u?.lastActiveAt),
+        createdAt: toIsoStringSafe(u?.createdAt || entry.firstUploadAt),
       });
-
-      userMap.delete(name);
     }
 
-    // Add users who might not have any files right now
-    for (const [, u] of userMap) {
+    for (const u of existingUsers) {
+      if (seenUserIds.has(u._id.toString())) continue;
       results.push({
         id: u._id.toString(),
-        name: u.name,
+        name: u.username || u.name,
         email: u.email,
         objectCount: 0,
         totalSizeBytes: 0,
         totalSizeFormatted: "0 B",
-        firstUploadAt: u.firstUploadAt?.toISOString?.() || undefined,
-        lastActiveAt: u.lastActiveAt?.toISOString?.() || undefined,
-        createdAt: u.createdAt?.toISOString?.() || new Date().toISOString(),
+        firstUploadAt: getOptionalIsoString(u.firstUploadAt),
+        lastActiveAt: getOptionalIsoString(u.lastActiveAt),
+        createdAt: toIsoStringSafe(u.createdAt),
       });
     }
 
-    // Sort by objectCount descending, then name ascending
-    results.sort((a, b) => b.objectCount - a.objectCount || a.name.localeCompare(b.name));
+    results.sort(
+      (a, b) => b.objectCount - a.objectCount || a.name.localeCompare(b.name)
+    );
 
     return results;
   } catch (error) {
     console.error("Error fetching users with stats from MongoDB:", error);
-    return [];
+    throw error;
   }
 }
 
 /**
- * Returns all objects uploaded by a specific user.
+ * Returns all objects uploaded by a specific user (case-insensitive username match).
  */
 export async function getUserFiles(userName: string): Promise<S3FileItem[]> {
   try {
     const db = await getDb();
     const filesCollection = db.collection("files");
+    const filter = await buildUserFilesFilter(userName);
 
     const docs = await filesCollection
-      .find({ uploadedBy: userName })
+      .find(filter)
       .sort({ uploadedAt: -1 })
       .toArray();
 
@@ -347,9 +519,9 @@ export async function getUserFiles(userName: string): Promise<S3FileItem[]> {
       size: doc.size,
       contentType: doc.contentType,
       category: doc.category,
-      lastModified: (doc.uploadedAt || new Date()).toISOString(),
+      lastModified: toIsoStringSafe(doc.uploadedAt),
       eTag: doc.eTag,
-      uploadedBy: doc.uploadedBy,
+      uploadedBy: doc.uploadedBy || "Unassigned",
     }));
   } catch (error) {
     console.error(`Error fetching files for user ${userName}:`, error);
@@ -358,109 +530,294 @@ export async function getUserFiles(userName: string): Promise<S3FileItem[]> {
 }
 
 /**
- * Deletes a file record from MongoDB and decrements user stats.
+ * Fetches a file record by S3 key.
  */
-export async function removeFileRecord(key: string): Promise<{ userName?: string; success: boolean }> {
+export async function getFileRecordByKey(key: string): Promise<{
+  key: string;
+  originalName?: string;
+  uploadedBy?: string;
+  contentType?: string;
+} | null> {
+  try {
+    const db = await getDb();
+    const doc = await db.collection("files").findOne({ key });
+    if (!doc) return null;
+    return {
+      key: doc.key,
+      originalName: doc.originalName,
+      uploadedBy: doc.uploadedBy,
+      contentType: doc.contentType,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves canonical file metadata from MongoDB, falling back to S3 HeadObject.
+ * Returns null if the object does not exist in either MongoDB or S3.
+ */
+export async function resolveCanonicalFileInfo(key: string): Promise<{
+  key: string;
+  originalName?: string;
+  uploadedBy?: string;
+  contentType?: string;
+} | null> {
+  const record = await getFileRecordByKey(key);
+  if (record && record.originalName && record.uploadedBy) {
+    return record;
+  }
+
+  const s3Meta = await getS3ObjectMetadata(key);
+  if (!record && !s3Meta) {
+    return null;
+  }
+
+  return {
+    key,
+    originalName: record?.originalName || s3Meta?.originalName,
+    uploadedBy: record?.uploadedBy || s3Meta?.uploadedBy,
+    contentType: record?.contentType || s3Meta?.contentType,
+  };
+}
+
+/**
+ * Deletes a file record from MongoDB and recalculates user stats.
+ */
+export async function removeFileRecord(
+  key: string
+): Promise<{ userName?: string; success: boolean; deleted?: boolean }> {
   try {
     const db = await getDb();
     const filesCollection = db.collection("files");
 
     const file = await filesCollection.findOne({ key });
     if (!file) {
-      return { success: false };
+      return { success: true, deleted: false };
     }
 
-    await filesCollection.deleteOne({ key });
+    const res = await filesCollection.deleteOne({ key });
     if (file.uploadedBy) {
       await refreshUserStats(file.uploadedBy);
     }
 
-    return { userName: file.uploadedBy, success: true };
+    return {
+      userName: file.uploadedBy,
+      success: res.deletedCount > 0,
+      deleted: res.deletedCount > 0,
+    };
   } catch (error) {
     console.error(`Error removing file record for key ${key}:`, error);
-    return { success: false };
+    return { success: false, deleted: false };
   }
 }
 
 /**
- * Deletes a user and their file records from MongoDB.
- * Returns the list of S3 object keys to be deleted from S3.
+ * Lists all S3 keys belonging to a user before deleting them from S3.
  */
-export async function deleteUserAndFiles(userName: string): Promise<string[]> {
+export async function getUserFileKeys(userName: string): Promise<string[]> {
   try {
     const db = await getDb();
-    const filesCollection = db.collection("files");
-    const usersCollection = db.collection("users");
-
-    // Fetch keys for S3 removal
-    const files = await filesCollection.find({ uploadedBy: userName }).project({ key: 1 }).toArray();
-    const keys = files.map((f) => f.key);
-
-    await filesCollection.deleteMany({ uploadedBy: userName });
-    await usersCollection.deleteOne({ name: userName });
-
-    return keys;
+    const filter = await buildUserFilesFilter(userName);
+    const files = await db
+      .collection("files")
+      .find(filter)
+      .project({ key: 1 })
+      .toArray();
+    return files.map((f) => f.key as string).filter(Boolean);
   } catch (error) {
-    console.error(`Error deleting user ${userName}:`, error);
+    console.error(`Error fetching keys for user ${userName}:`, error);
     return [];
   }
 }
 
 /**
- * Synchronizes existing S3 files with MongoDB records if any are missing.
+ * Deletes specified file records and optionally the user document after S3 cleanup succeeds.
  */
-export async function syncS3FilesWithMongo(s3Files: S3FileItem[]): Promise<void> {
+export async function deleteUserRecordsAfterS3(
+  userName: string,
+  deletedKeys: string[],
+  removeUserAccount: boolean
+): Promise<void> {
   try {
     const db = await getDb();
     const filesCollection = db.collection("files");
+    const usersCollection = db.collection("users");
+    const clean = userName.trim();
+    const userRegex = new RegExp(`^${escapeRegExp(clean)}$`, "i");
 
-    const existingKeys = new Set(
-      (await filesCollection.find({}, { projection: { key: 1 } }).toArray()).map((f) => f.key)
-    );
+    if (deletedKeys.length > 0) {
+      await filesCollection.deleteMany({ key: { $in: deletedKeys } });
+    }
 
-    const defaultNames = ["Aditya", "Tushar", "Sankalpa", "Purabi"];
-    let nameIndex = 0;
-
-    for (const s3File of s3Files) {
-      if (!existingKeys.has(s3File.key)) {
-        // Attribute to a known team member or s3File.uploadedBy
-        const assignedUser = s3File.uploadedBy || defaultNames[nameIndex % defaultNames.length];
-        nameIndex++;
-
-        await recordFileUpload({
-          key: s3File.key,
-          originalName: s3File.originalName,
-          size: s3File.size,
-          contentType: s3File.contentType,
-          category: s3File.category,
-          uploadedBy: assignedUser,
-          uploadedAt: new Date(s3File.lastModified),
-          eTag: s3File.eTag,
-        });
-      }
+    if (removeUserAccount && clean.toLowerCase() !== "unassigned") {
+      await usersCollection.deleteMany({
+        $or: [
+          { username: clean.toLowerCase() },
+          { name: { $regex: userRegex } },
+        ],
+      });
+      invalidateBloomFilter();
+    } else if (clean.toLowerCase() !== "unassigned") {
+      await refreshUserStats(clean);
     }
   } catch (error) {
-    console.warn("Could not sync S3 files with MongoDB:", error);
+    console.error(`Error cleaning up MongoDB for user ${userName}:`, error);
+    throw error;
   }
 }
 
 /**
- * Fetches map of S3 key -> { uploadedBy, uploadedAt } from MongoDB.
+ * Synchronizes existing S3 files missing from MongoDB and prunes stale records deleted from S3.
  */
-export async function getFileMetadataMap(): Promise<Map<string, { uploadedBy?: string; uploadedAt?: Date }>> {
+export async function syncS3FilesWithMongo(
+  s3Files: S3FileItem[]
+): Promise<void> {
+  if (globalThis._mongoSyncPromise) {
+    return globalThis._mongoSyncPromise;
+  }
+
+  globalThis._mongoSyncPromise = (async () => {
+    try {
+      const db = await getDb();
+      const filesCollection = db.collection("files");
+
+      const existingDocs = await filesCollection
+        .find({}, { projection: { key: 1, uploadedBy: 1 } })
+        .toArray();
+
+      const existingKeys = new Set<string>();
+      const s3KeySet = new Set(s3Files.map((f) => f.key));
+      const staleKeys: string[] = [];
+      const affectedUsers = new Set<string>();
+
+      for (const doc of existingDocs) {
+        if (typeof doc.key !== "string" || !doc.key) continue;
+        existingKeys.add(doc.key);
+        if (!s3KeySet.has(doc.key)) {
+          staleKeys.push(doc.key);
+          if (typeof doc.uploadedBy === "string" && doc.uploadedBy.trim()) {
+            affectedUsers.add(doc.uploadedBy.trim());
+          }
+        }
+      }
+
+      if (staleKeys.length > 0) {
+        await filesCollection.deleteMany({ key: { $in: staleKeys } });
+      }
+
+      const missingFiles = s3Files.filter((f) => !existingKeys.has(f.key));
+
+      for (let i = 0; i < missingFiles.length; i += SYNC_BATCH_SIZE) {
+        const batch = missingFiles.slice(i, i + SYNC_BATCH_SIZE);
+        await Promise.all(
+          batch.map(async (s3File) => {
+            const s3Meta = await getS3ObjectMetadata(s3File.key);
+            const originalName = s3Meta?.originalName || s3File.originalName;
+            const contentType = s3Meta?.contentType || s3File.contentType;
+            const category =
+              (s3Meta?.category as S3FileItem["category"]) ||
+              getFileCategory(originalName, contentType);
+            const uploadedBy =
+              s3Meta?.uploadedBy || s3File.uploadedBy || "Unassigned";
+            const uploadedAt = s3Meta?.uploadedAt
+              ? new Date(s3Meta.uploadedAt)
+              : new Date(s3File.lastModified);
+
+            await recordFileUpload(
+              {
+                key: s3File.key,
+                originalName,
+                size: s3File.size,
+                contentType,
+                category,
+                uploadedBy,
+                uploadedAt: isNaN(uploadedAt.getTime())
+                  ? new Date(s3File.lastModified)
+                  : uploadedAt,
+                eTag: s3Meta?.eTag || s3File.eTag,
+              },
+              { skipStatsRefresh: true }
+            );
+
+            if (uploadedBy !== "Unassigned") {
+              affectedUsers.add(uploadedBy);
+            }
+          })
+        );
+      }
+
+      if (affectedUsers.size > 0) {
+        await Promise.all(
+          Array.from(affectedUsers).map((u) => refreshUserStats(u))
+        );
+      }
+    } catch (error) {
+      console.warn("Could not sync S3 files with MongoDB:", error);
+    } finally {
+      globalThis._mongoSyncPromise = undefined;
+    }
+  })();
+
+  return globalThis._mongoSyncPromise;
+}
+
+/**
+ * Fetches map of S3 key -> rich metadata from MongoDB.
+ */
+export async function getFileMetadataMap(): Promise<
+  Map<
+    string,
+    {
+      originalName?: string;
+      contentType?: string;
+      category?: S3FileItem["category"];
+      uploadedBy?: string;
+      uploadedAt?: Date;
+      eTag?: string;
+    }
+  >
+> {
   try {
     const db = await getDb();
     const filesCollection = db.collection("files");
     const docs = await filesCollection
-      .find({}, { projection: { key: 1, uploadedBy: 1, uploadedAt: 1 } })
+      .find(
+        {},
+        {
+          projection: {
+            key: 1,
+            originalName: 1,
+            contentType: 1,
+            category: 1,
+            uploadedBy: 1,
+            uploadedAt: 1,
+            eTag: 1,
+          },
+        }
+      )
       .toArray();
 
-    const map = new Map<string, { uploadedBy?: string; uploadedAt?: Date }>();
+    const map = new Map<
+      string,
+      {
+        originalName?: string;
+        contentType?: string;
+        category?: S3FileItem["category"];
+        uploadedBy?: string;
+        uploadedAt?: Date;
+        eTag?: string;
+      }
+    >();
     for (const doc of docs) {
       if (doc.key) {
         map.set(doc.key, {
+          originalName: doc.originalName,
+          contentType: doc.contentType,
+          category: doc.category,
           uploadedBy: doc.uploadedBy,
           uploadedAt: doc.uploadedAt,
+          eTag: doc.eTag,
         });
       }
     }
@@ -468,5 +825,36 @@ export async function getFileMetadataMap(): Promise<Map<string, { uploadedBy?: s
   } catch (error) {
     console.warn("Could not fetch file metadata map from MongoDB:", error);
     return new Map();
+  }
+}
+
+/**
+ * Lists all S3 objects enriched with MongoDB metadata (and optionally syncs missing/stale rows).
+ */
+export async function listEnrichedS3Files(options?: {
+  sync?: boolean;
+}): Promise<S3FileItem[]> {
+  const files = await listS3Files();
+
+  try {
+    if (options?.sync) {
+      await syncS3FilesWithMongo(files);
+    }
+    const metaMap = await getFileMetadataMap();
+    return files.map((f) => {
+      const meta = metaMap.get(f.key);
+      const originalName = meta?.originalName || f.originalName;
+      const contentType = meta?.contentType || f.contentType;
+      return {
+        ...f,
+        originalName,
+        contentType,
+        category: meta?.category || getFileCategory(originalName, contentType),
+        uploadedBy: meta?.uploadedBy || f.uploadedBy || "Unassigned",
+        eTag: meta?.eTag || f.eTag,
+      };
+    });
+  } catch {
+    return files;
   }
 }

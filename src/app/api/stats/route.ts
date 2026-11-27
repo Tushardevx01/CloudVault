@@ -1,12 +1,27 @@
-import { NextResponse } from "next/server";
-import { listS3Files, getS3ConfigStatus, getBucketName } from "@/lib/s3";
+import { NextRequest, NextResponse } from "next/server";
+import {
+  getS3ConfigStatus,
+  getBucketName,
+  getEffectiveRegion,
+} from "@/lib/s3";
+import { listEnrichedS3Files } from "@/lib/mongodb";
+import {
+  isCallerFileOwner,
+  requireAuthenticatedCaller,
+} from "@/lib/requestAuth";
 import { formatBytes } from "@/lib/utils";
 import { FileCategory, StorageStats } from "@/types/file";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to view storage metrics."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   const bucketName = getBucketName();
-  const region = config.region;
+  const region = getEffectiveRegion();
 
   if (!config.isValid) {
     const emptyCategories: StorageStats["categories"] = {
@@ -18,25 +33,35 @@ export async function GET() {
       other: { count: 0, sizeBytes: 0, sizeFormatted: "0 B", percentage: 0 },
     };
 
-    return NextResponse.json({
-      success: false,
-      configured: false,
-      error: config.errorMessage,
-      stats: {
-        totalFiles: 0,
-        totalSizeBytes: 0,
-        totalSizeFormatted: "0 B",
-        categories: emptyCategories,
-        recentUploads: [],
-        bucketName,
-        region,
-        storageHealth: config.missingVariables.length > 0 ? "credentials_missing" : "misconfigured",
+    return NextResponse.json(
+      {
+        success: false,
+        configured: false,
+        error: config.errorMessage,
+        stats: {
+          totalFiles: 0,
+          totalSizeBytes: 0,
+          totalSizeFormatted: "0 B",
+          categories: emptyCategories,
+          recentUploads: [],
+          bucketName,
+          region,
+          storageHealth:
+            config.missingVariables.length > 0
+              ? "credentials_missing"
+              : "misconfigured",
+        },
       },
-    });
+      { status: 503 }
+    );
   }
 
   try {
-    const files = await listS3Files();
+    let files = await listEnrichedS3Files({ sync: true });
+
+    if (auth.user) {
+      files = files.filter((f) => isCallerFileOwner(f.uploadedBy, auth.user));
+    }
 
     let totalSizeBytes = 0;
     const catMap: Record<FileCategory, { count: number; sizeBytes: number }> = {
@@ -77,16 +102,14 @@ export async function GET() {
       })
     ) as StorageStats["categories"];
 
-    const recentUploads = files.slice(0, 5);
-
     const stats: StorageStats = {
       totalFiles: files.length,
       totalSizeBytes,
       totalSizeFormatted: formatBytes(totalSizeBytes),
       categories,
-      recentUploads,
+      recentUploads: files.slice(0, 5),
       bucketName,
-      region,
+      region: getEffectiveRegion(),
       storageHealth: "connected",
     };
 

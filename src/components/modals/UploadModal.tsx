@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   UploadCloud,
   X,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { formatBytes, getFileCategory } from "@/lib/utils";
 import { FileIcon } from "../files/FileIcon";
-import { MAX_FILE_SIZE_BYTES } from "@/lib/constants";
+import { MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_FORMATTED } from "@/lib/constants";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -38,40 +38,32 @@ export function UploadModal({
   onClose,
   onUploadSuccess,
   onAddToast,
-  currentUsername,
 }: UploadModalProps) {
   const [dragActive, setDragActive] = useState(false);
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploaderName, setUploaderName] = useState(currentUsername || "User");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAutoCloseTimer = () => {
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+  };
 
   useEffect(() => {
-    if (currentUsername) {
-      setUploaderName(currentUsername);
-      return;
-    }
-    if (typeof window !== "undefined") {
-      const savedUser = localStorage.getItem("cloudvault_user");
-      if (savedUser) {
-        try {
-          const parsed = JSON.parse(savedUser);
-          if (parsed.username || parsed.name) {
-            setUploaderName(parsed.username || parsed.name);
-            return;
-          }
-        } catch {
-          // ignore
-        }
-      }
-      const savedName = localStorage.getItem("cloudvault_uploader_name");
-      if (savedName && savedName.trim()) {
-        setUploaderName(savedName.trim());
-      }
-    }
-  }, [currentUsername, isOpen]);
+    return () => clearAutoCloseTimer();
+  }, []);
 
   if (!isOpen) return null;
+
+  const handleClose = () => {
+    if (isUploading) return;
+    clearAutoCloseTimer();
+    setQueue([]);
+    onClose();
+  };
 
   const handleFiles = (files: FileList | null) => {
     if (!files) return;
@@ -82,7 +74,7 @@ export function UploadModal({
         onAddToast({
           type: "error",
           title: "File Exceeds Limit",
-          message: `${file.name} is larger than the 50MB limit.`,
+          message: `${file.name} is larger than the ${MAX_FILE_SIZE_FORMATTED} limit.`,
         });
         return;
       }
@@ -104,6 +96,9 @@ export function UploadModal({
     });
 
     setQueue((prev) => [...prev, ...newItems]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -135,21 +130,30 @@ export function UploadModal({
     setQueue([]);
   };
 
-  const startUpload = async () => {
-    const pendingFiles = queue.filter((item) => item.status === "idle");
-    if (pendingFiles.length === 0) return;
+  const pendingItems = queue.filter(
+    (item) => item.status === "idle" || item.status === "error"
+  );
 
+  const startUpload = async () => {
+    if (pendingItems.length === 0) return;
+
+    clearAutoCloseTimer();
+    const pendingIndexById = new Map(
+      pendingItems.map((item, index) => [item.id, index])
+    );
+    const pendingIds = new Set(pendingItems.map((i) => i.id));
     setIsUploading(true);
 
     const formData = new FormData();
-    formData.append("userName", (currentUsername || uploaderName).trim() || "User");
-    pendingFiles.forEach((item) => {
+    pendingItems.forEach((item) => {
       formData.append("files", item.file);
     });
 
     setQueue((prev) =>
       prev.map((item) =>
-        item.status === "idle" ? { ...item, status: "uploading" } : item
+        pendingIds.has(item.id)
+          ? { ...item, status: "uploading", errorMessage: undefined }
+          : item
       )
     );
 
@@ -160,44 +164,96 @@ export function UploadModal({
       });
 
       const result = await response.json();
+      const errorList: { index?: number; name: string; error: string }[] =
+        result.errors || result.details || [];
+      const errorByIndex = new Map<number, string>();
+      const errorByName = new Map<string, string>();
+      for (const entry of errorList) {
+        if (typeof entry.index === "number") {
+          errorByIndex.set(entry.index, entry.error);
+        }
+        errorByName.set(entry.name, entry.error);
+      }
+
+      const resolveItemError = (item: QueuedFile) => {
+        const idx = pendingIndexById.get(item.id);
+        if (typeof idx === "number" && errorByIndex.has(idx)) {
+          return errorByIndex.get(idx);
+        }
+        if (errorByIndex.size === 0) {
+          return errorByName.get(item.file.name);
+        }
+        return undefined;
+      };
 
       if (response.ok && result.success) {
-        const successCount = result.uploaded?.length || pendingFiles.length;
+        const successCount = result.uploaded?.length || 0;
+
         setQueue((prev) =>
-          prev.map((item) => ({ ...item, status: "success" }))
+          prev.map((item) => {
+            if (!pendingIds.has(item.id)) return item;
+            const itemError = resolveItemError(item);
+            if (itemError) {
+              return { ...item, status: "error", errorMessage: itemError };
+            }
+            return { ...item, status: "success", errorMessage: undefined };
+          })
         );
-        onAddToast({
-          type: "success",
-          title: "Upload Completed",
-          message: `Successfully uploaded ${successCount} file(s) to your cloud vault.`,
-        });
-        onUploadSuccess();
-        setTimeout(() => {
-          onClose();
-          setQueue([]);
-        }, 1000);
+
+        if (errorList.length > 0) {
+          onAddToast({
+            type: "info",
+            title: "Partial Upload Completed",
+            message: `${successCount} uploaded, ${errorList.length} failed. Review errors in the queue.`,
+          });
+          onUploadSuccess();
+        } else {
+          onAddToast({
+            type: "success",
+            title: "Upload Completed",
+            message: `Successfully uploaded ${successCount} file(s) to your cloud vault.`,
+          });
+          onUploadSuccess();
+          autoCloseTimerRef.current = setTimeout(() => {
+            autoCloseTimerRef.current = null;
+            onClose();
+            setQueue([]);
+          }, 900);
+        }
       } else {
         setQueue((prev) =>
-          prev.map((item) => ({
-            ...item,
-            status: "error",
-            errorMessage: result.error || "Upload failed.",
-          }))
+          prev.map((item) =>
+            pendingIds.has(item.id)
+              ? {
+                  ...item,
+                  status: "error",
+                  errorMessage:
+                    resolveItemError(item) ||
+                    result.error ||
+                    "Upload failed.",
+                }
+              : item
+          )
         );
         onAddToast({
           type: "error",
           title: "Upload Error",
-          message: result.error || "Could not complete upload to cloud storage.",
+          message:
+            result.error || "Could not complete upload to cloud storage.",
         });
       }
     } catch (err: unknown) {
       const error = err as { message?: string };
       setQueue((prev) =>
-        prev.map((item) => ({
-          ...item,
-          status: "error",
-          errorMessage: error.message || "Network error.",
-        }))
+        prev.map((item) =>
+          pendingIds.has(item.id)
+            ? {
+                ...item,
+                status: "error",
+                errorMessage: error.message || "Network error.",
+              }
+            : item
+        )
       );
       onAddToast({
         type: "error",
@@ -225,12 +281,13 @@ export function UploadModal({
                 Upload Files
               </h2>
               <p className="text-xs text-[#718096]">
-                Add documents, media, or archives to your vault (up to 50MB each)
+                Add documents, media, or archives to your vault (up to{" "}
+                {MAX_FILE_SIZE_FORMATTED} each)
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isUploading}
             className="p-1.5 rounded-lg text-[#718096] hover:text-[#263747] hover:bg-[#F6F9FC] transition-colors disabled:opacity-40 cursor-pointer"
             aria-label="Close modal"
@@ -271,7 +328,8 @@ export function UploadModal({
               </span>
             </p>
             <p className="text-xs text-[#718096] mt-1">
-              Supports multiple files up to 50MB each. Encrypted at rest.
+              Supports multiple files up to {MAX_FILE_SIZE_FORMATTED} each.
+              Encrypted at rest.
             </p>
           </div>
 
@@ -280,7 +338,8 @@ export function UploadModal({
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-[#718096] px-1">
                 <span>
-                  Files to upload: {queue.length} ({formatBytes(totalQueuedBytes)})
+                  Files in queue: {queue.length} ({formatBytes(totalQueuedBytes)}
+                  )
                 </span>
                 {!isUploading && (
                   <button
@@ -294,7 +353,10 @@ export function UploadModal({
 
               <div className="max-h-52 overflow-y-auto space-y-2 pr-1">
                 {queue.map((item) => {
-                  const category = getFileCategory(item.file.name, item.file.type);
+                  const category = getFileCategory(
+                    item.file.name,
+                    item.file.type
+                  );
                   return (
                     <div
                       key={item.id}
@@ -312,11 +374,11 @@ export function UploadModal({
                           </p>
                           <p className="text-[11px] text-[#718096] font-mono">
                             {formatBytes(item.file.size)}
+                            {item.errorMessage ? ` • ${item.errorMessage}` : ""}
                           </p>
                         </div>
                       </div>
 
-                      {/* Status indicator */}
                       <div className="flex items-center gap-2 shrink-0">
                         {item.status === "uploading" && (
                           <span className="flex items-center gap-1 text-[#3B9EE0] font-medium">
@@ -339,15 +401,16 @@ export function UploadModal({
                             <span>Failed</span>
                           </span>
                         )}
-                        {item.status === "idle" && !isUploading && (
-                          <button
-                            onClick={() => removeQueuedFile(item.id)}
-                            className="p-1 rounded text-[#718096] hover:text-rose-600 transition-colors cursor-pointer"
-                            aria-label="Remove file"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                        {(item.status === "idle" || item.status === "error") &&
+                          !isUploading && (
+                            <button
+                              onClick={() => removeQueuedFile(item.id)}
+                              className="p-1 rounded text-[#718096] hover:text-rose-600 transition-colors cursor-pointer"
+                              aria-label="Remove file"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                       </div>
                     </div>
                   );
@@ -360,7 +423,7 @@ export function UploadModal({
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-[#E3EAF0] bg-[#F6F9FC] flex items-center justify-end gap-3">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isUploading}
             className="px-4 py-2 rounded-xl text-xs font-semibold text-[#263747] border border-[#E3EAF0] bg-white hover:bg-[#F6F9FC] transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
           >
@@ -368,7 +431,7 @@ export function UploadModal({
           </button>
           <button
             onClick={startUpload}
-            disabled={isUploading || queue.length === 0}
+            disabled={isUploading || pendingItems.length === 0}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#78BCE8] hover:bg-[#3B9EE0] active:bg-[#20628E] disabled:bg-[#E3EAF0] disabled:text-[#718096] text-white text-xs font-semibold shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed"
           >
             {isUploading ? (
@@ -379,7 +442,11 @@ export function UploadModal({
             ) : (
               <>
                 <UploadCloud className="w-4 h-4" />
-                <span>Upload {queue.length > 0 ? `(${queue.length})` : ""}</span>
+                <span>
+                  {queue.some((q) => q.status === "error")
+                    ? `Retry Failed (${pendingItems.length})`
+                    : `Upload ${pendingItems.length > 0 ? `(${pendingItems.length})` : ""}`}
+                </span>
               </>
             )}
           </button>

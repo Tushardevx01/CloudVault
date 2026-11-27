@@ -1,7 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPresignedFileUrl, extractOriginalName, getS3ConfigStatus, getS3ObjectStream } from "@/lib/s3";
+import { Readable } from "stream";
+import {
+  getPresignedFileUrl,
+  extractOriginalName,
+  getS3ConfigStatus,
+  getS3ObjectStream,
+} from "@/lib/s3";
+import { resolveCanonicalFileInfo } from "@/lib/mongodb";
+import {
+  isCallerFileOwner,
+  parseValidatedKeyParam,
+  requireAuthenticatedCaller,
+} from "@/lib/requestAuth";
+import { buildContentDisposition } from "@/lib/utils";
+import { PRESIGNED_URL_EXPIRY_SECONDS } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthenticatedCaller(
+    request,
+    "Authentication required to download files."
+  );
+  if (!auth.authorized) return auth.response;
+
   const config = getS3ConfigStatus();
   if (!config.isValid) {
     return NextResponse.json(
@@ -10,51 +30,80 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const parsedKey = parseValidatedKeyParam(request);
+  if (!parsedKey.valid) return parsedKey.response;
+  const { key } = parsedKey;
+
   try {
+    const fileInfo = await resolveCanonicalFileInfo(key);
+    if (!fileInfo) {
+      return NextResponse.json(
+        { success: false, error: "Requested file was not found in storage." },
+        { status: 404 }
+      );
+    }
+
+    if (!auth.isAdmin && !isCallerFileOwner(fileInfo.uploadedBy, auth.user)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Permission denied: You can only download files that you have uploaded.",
+        },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
-    const key = searchParams.get("key");
-    const nameParam = searchParams.get("name");
     const stream = searchParams.get("stream") === "true";
     const json = searchParams.get("json") === "true";
 
-    if (!key) {
-      return NextResponse.json(
-        { success: false, error: "Missing required query parameter: key" },
-        { status: 400 }
-      );
-    }
-
-    if (!key.startsWith("uploads/") || key.includes("..")) {
-      return NextResponse.json(
-        { success: false, error: "Invalid object key." },
-        { status: 400 }
-      );
-    }
-
-    const filename = nameParam || extractOriginalName(key);
+    const filename = fileInfo.originalName || extractOriginalName(key);
 
     if (stream) {
       const s3Response = await getS3ObjectStream(key);
+      if (!s3Response.Body) {
+        return NextResponse.json(
+          { success: false, error: "File body not found in storage." },
+          { status: 404 }
+        );
+      }
+
       const headers = new Headers();
-      headers.set("Content-Type", s3Response.ContentType || "application/octet-stream");
+      headers.set(
+        "Content-Type",
+        s3Response.ContentType || "application/octet-stream"
+      );
       headers.set(
         "Content-Disposition",
-        `attachment; filename="${encodeURIComponent(filename)}"`
+        buildContentDisposition("attachment", filename)
       );
-      if (s3Response.ContentLength) {
+      if (typeof s3Response.ContentLength === "number") {
         headers.set("Content-Length", s3Response.ContentLength.toString());
       }
 
-      // Convert readable stream to web stream
-      const streamBody = s3Response.Body as unknown as ReadableStream;
-      return new NextResponse(streamBody, {
+      const body = s3Response.Body as {
+        transformToWebStream?: () => ReadableStream;
+      };
+      const webStream =
+        typeof body.transformToWebStream === "function"
+          ? body.transformToWebStream()
+          : (Readable.toWeb(
+              s3Response.Body as unknown as Readable
+            ) as unknown as ReadableStream);
+
+      return new NextResponse(webStream, {
         status: 200,
         headers,
       });
     }
 
-    // Presigned download URL valid for 15 minutes
-    const downloadUrl = await getPresignedFileUrl(key, "attachment", filename, 900);
+    const downloadUrl = await getPresignedFileUrl(
+      key,
+      "attachment",
+      filename,
+      PRESIGNED_URL_EXPIRY_SECONDS
+    );
 
     if (json) {
       return NextResponse.json({
@@ -64,17 +113,27 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Redirect browser directly to presigned URL
     return NextResponse.redirect(downloadUrl, 307);
   } catch (error: unknown) {
-    const err = error as { message?: string };
+    const err = error as {
+      name?: string;
+      message?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    const status =
+      err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404
+        ? 404
+        : 500;
     console.error("Error generating download URL:", err);
     return NextResponse.json(
       {
         success: false,
-        error: err.message || "Failed to generate download URL.",
+        error:
+          status === 404
+            ? "Requested file was not found in Amazon S3."
+            : err.message || "Failed to generate download URL.",
       },
-      { status: 500 }
+      { status }
     );
   }
 }

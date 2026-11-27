@@ -156,12 +156,19 @@ export function Sidebar({
             <div
               className="h-full bg-gradient-to-r from-[#8CBCE8] via-[#83CBA0] to-[#A399F0] rounded-full transition-all duration-300"
               style={{
-                width: stats && stats.totalSizeBytes > 0 ? "28%" : "0%",
+                width: `${
+                  stats && stats.totalSizeBytes > 0
+                    ? Math.min(
+                        100,
+                        Math.max(4, (stats.totalSizeBytes / (1024 * 1024 * 1024)) * 100)
+                      )
+                    : 0
+                }%`,
               }}
             />
           </div>
           <p className="text-[10px] text-[#7A8792]">
-            {stats?.totalFiles ?? 0} active objects in AWS S3
+            {stats?.totalFiles ?? 0} active objects • 1 GB workspace ref
           </p>
         </div>
 

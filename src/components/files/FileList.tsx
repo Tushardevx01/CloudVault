@@ -4,7 +4,13 @@ import React from "react";
 import { Eye, Download, Trash2, FileQuestion } from "lucide-react";
 import { S3FileItem } from "@/types/file";
 import { FileIcon } from "./FileIcon";
-import { formatBytes, formatDate, formatRelativeTime } from "@/lib/utils";
+import {
+  formatBytes,
+  formatDate,
+  formatRelativeTime,
+  isFileOwnedByUser,
+  isFilePreviewable,
+} from "@/lib/utils";
 
 interface FileListProps {
   files: S3FileItem[];
@@ -14,6 +20,7 @@ interface FileListProps {
   onDelete: (file: S3FileItem) => void;
   onOpenUpload: () => void;
   currentUsername?: string;
+  currentUserAliases?: string[];
   isAdmin?: boolean;
 }
 
@@ -25,6 +32,7 @@ export function FileList({
   onDelete,
   onOpenUpload,
   currentUsername,
+  currentUserAliases = [],
   isAdmin = false,
 }: FileListProps) {
   if (isLoading) {
@@ -111,15 +119,15 @@ export function FileList({
           </thead>
           <tbody className="divide-y divide-[#E3EAF0]/60 text-[#29343D]">
             {files.map((file) => {
-              const isPreviewable =
-                file.category === "image" ||
-                file.originalName.toLowerCase().endsWith(".pdf") ||
-                file.category === "code";
+              const isPreviewable = isFilePreviewable(
+                file.originalName,
+                file.category
+              );
 
-              const isOwner = Boolean(
-                currentUsername &&
-                file.uploadedBy &&
-                file.uploadedBy.toLowerCase().trim() === currentUsername.toLowerCase().trim()
+              const isOwner = isFileOwnedByUser(
+                file.uploadedBy,
+                currentUsername,
+                ...currentUserAliases
               );
               const canDelete = isAdmin || isOwner;
 
